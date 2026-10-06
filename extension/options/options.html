@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Lead Capture settings</title>
+    <link rel="stylesheet" href="../popup/popup.css" />
+    <link rel="stylesheet" href="options.css" />
+  </head>
+  <body>
+    <main class="page">
+      <h1>Lead Capture settings</h1>
+
+      <form id="settings-form" class="stack">
+        <div class="field">
+          <label for="backendUrl">Extraction server URL</label>
+          <input id="backendUrl" name="backendUrl" type="url" required />
+        </div>
+        <div class="field">
+          <label for="apiKey">Server API key</label>
+          <input id="apiKey" name="apiKey" type="password" autocomplete="off" />
+          <small>Must match EXTENSION_API_KEY on the server. Leave empty if the server has none set.</small>
+        </div>
+        <div class="field">
+          <label>What to capture</label>
+          <div id="captureTargets" class="checks"></div>
+          <small>
+            The kinds of data the mapping agent looks for in a CRM, whatever the vendor. Each kind found is mapped once, captured
+            straight away during that first mapping, and saved to its own daily file (<code>…_users_…</code>,
+            <code>…_customers_…</code>, <code>…_deals_…</code>…), next to <code>…_messages_…</code> (texts, emails, calls, notes)
+            and <code>…_reference_…</code> (every lead source, status, role, salesperson… the CRM uses). A CRM keeps the kinds it
+            was mapped for; change this and map it again to switch.
+          </small>
+        </div>
+        <div class="field">
+          <label for="capturedBy">Your name</label>
+          <input id="capturedBy" name="capturedBy" />
+          <small>Written to the captured_by column.</small>
+        </div>
+        <div class="field">
+          <label for="defaultDealerName">Default dealership name (optional)</label>
+          <input id="defaultDealerName" name="defaultDealerName" />
+          <small>Added as dealer_name to every saved row that doesn't have one. Leave empty for general use.</small>
+        </div>
+        <div class="grid">
+          <div class="field">
+            <label for="downloadFolder">Folder inside Downloads</label>
+            <input id="downloadFolder" name="downloadFolder" />
+          </div>
+          <div class="field">
+            <label for="filePrefix">File name prefix</label>
+            <input id="filePrefix" name="filePrefix" />
+          </div>
+        </div>
+        <small id="file-example"></small>
+        <div class="row">
+          <button type="submit" class="primary">Save settings</button>
+          <span id="saved-msg" class="status success"></span>
+        </div>
+      </form>
+
+      <h2>CRM layouts</h2>
+      <p class="muted">
+        The mapping agent learns where each CRM keeps names, phones, emails and message history, so captures on those CRMs
+        need no AI. Open a CRM you're signed in to and use <b>Map this CRM</b> in the popup: the exploring happens in this
+        browser with your session. Layouts are re-mapped daily and whenever a saved layout stops fitting a page.
+      </p>
+      <table id="crms">
+        <thead>
+          <tr><th>CRM</th><th>Captures</th><th>Layout</th><th>Mapped</th><th></th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+      <p id="crms-msg" class="status"></p>
+      <div class="row">
+        <button id="refresh-crms" type="button">Refresh</button>
+      </div>
+
+      <h2>Saved days</h2>
+      <p class="muted">Each day's captures are kept in the extension. Rewrite a file here if it was deleted or couldn't be written.</p>
+      <table id="days">
+        <thead>
+          <tr><th>Date</th><th>Records</th><th>Messages</th><th></th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+      <p id="days-msg" class="status"></p>
+      <button id="open-folder" type="button">Open Downloads folder</button>
+    </main>
+    <script type="module" src="options.js"></script>
+  </body>
+</html>

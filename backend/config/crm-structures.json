@@ -1,0 +1,3338 @@
+{
+  "schemaVersion": 1,
+  "updatedAt": "2026-10-05T14:01:30.509Z",
+  "crms": {
+    "vinsolutions": {
+      "name": "VinSolutions (mock)",
+      "match": {
+        "hosts": [
+          "localhost:4101"
+        ]
+      },
+      "startUrl": "http://localhost:4101/vinconnect/",
+      "version": 3,
+      "mappedAt": "2026-10-01T13:23:07.871Z",
+      "mappedBy": "mapper-agent (gpt-5.6-luna)",
+      "pageTypes": [
+        {
+          "id": "customer",
+          "role": "record",
+          "entity": "customer",
+          "description": "John Doe customer record – general details",
+          "urlRegex": "^/vinconnect/customer\\?GlobalCustomerID=([^/?&#]+)(?=$|[?&#])",
+          "frame": {
+            "urlRegex": "^/CarDashboard/Pages/CRM/CustomerDashboard\\.aspx\\?GlobalCustomerID=([^/?&#]+)(?=$|[?&#])"
+          },
+          "views": [
+            {
+              "name": "General",
+              "activate": {
+                "css": "a.rtsLink",
+                "text": "General"
+              },
+              "waitFor": "#ctl00_ContentPlaceHolder1_lblCellPhone",
+              "fields": {
+                "phone_mobile": [
+                  {
+                    "css": "#ctl00_ContentPlaceHolder1_lblCellPhone"
+                  },
+                  {
+                    "label": "Cell Phone"
+                  }
+                ],
+                "phone_home": [
+                  {
+                    "css": "#ctl00_ContentPlaceHolder1_lblHomePhone"
+                  },
+                  {
+                    "label": "Home Phone"
+                  }
+                ],
+                "email": [
+                  {
+                    "css": "#ctl00_ContentPlaceHolder1_lnkEmail"
+                  },
+                  {
+                    "label": "E-Mail"
+                  }
+                ],
+                "address": [
+                  {
+                    "css": "#ctl00_ContentPlaceHolder1_lblAddress1"
+                  }
+                ],
+                "city": [
+                  {
+                    "css": "#ctl00_ContentPlaceHolder1_lblCityStateZip"
+                  }
+                ],
+                "vehicle_year": [
+                  {
+                    "css": "#ctl00_ContentPlaceHolder1_lblVehicle"
+                  },
+                  {
+                    "label": "Vehicle"
+                  }
+                ],
+                "vin": [
+                  {
+                    "css": "#ctl00_ContentPlaceHolder1_lblVin"
+                  },
+                  {
+                    "label": "VIN"
+                  }
+                ],
+                "stock_number": [
+                  {
+                    "css": "#ctl00_ContentPlaceHolder1_lblStock"
+                  },
+                  {
+                    "label": "Stock #"
+                  }
+                ],
+                "lead_source": [
+                  {
+                    "css": "#ctl00_ContentPlaceHolder1_lblSource"
+                  },
+                  {
+                    "label": "Lead Source"
+                  }
+                ],
+                "lead_status": [
+                  {
+                    "css": "#ctl00_ContentPlaceHolder1_lblStatus"
+                  },
+                  {
+                    "label": "Lead Status"
+                  }
+                ],
+                "salesperson": [
+                  {
+                    "css": "#ctl00_ContentPlaceHolder1_lblSalesRep"
+                  },
+                  {
+                    "label": "Sales Rep"
+                  }
+                ],
+                "created_date": [
+                  {
+                    "css": "#ctl00_ContentPlaceHolder1_lblCreated"
+                  },
+                  {
+                    "label": "Created"
+                  }
+                ]
+              },
+              "collections": {}
+            },
+            {
+              "name": "Texting",
+              "activate": {
+                "css": "a.rtsLink",
+                "text": "Texting"
+              },
+              "waitFor": "#ctl00_ContentPlaceHolder1_divSmsThread",
+              "fields": {
+                "full_name": [
+                  {
+                    "css": "#ctl00_ContentPlaceHolder1_lblHeaderName"
+                  }
+                ],
+                "customer_number": [
+                  {
+                    "css": "span.cust-meta",
+                    "regex": "^([^·]+)"
+                  },
+                  {
+                    "label": "John Doe",
+                    "regex": "^([^·]+)"
+                  }
+                ]
+              },
+              "collections": {
+                "text_messages": {
+                  "container": "#ctl00_ContentPlaceHolder1_divSmsThread",
+                  "item": ":scope > div",
+                  "fields": {
+                    "timestamp": [
+                      {
+                        "css": ":scope span.sms-time"
+                      }
+                    ],
+                    "sender": [
+                      {
+                        "css": ":scope span.sms-sender"
+                      }
+                    ],
+                    "body": [
+                      {
+                        "css": ":scope div.sms-text"
+                      }
+                    ],
+                    "direction": [
+                      {
+                        "css": ":scope",
+                        "attr": "class",
+                        "regex": "sms-(inbound|outbound)"
+                      }
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "name": "Email",
+              "activate": {
+                "css": "a.rtsLink",
+                "text": "Email"
+              },
+              "waitFor": "#ctl00_ContentPlaceHolder1_gridEmails",
+              "fields": {},
+              "collections": {
+                "emails": {
+                  "container": "#ctl00_ContentPlaceHolder1_gridEmails",
+                  "item": ":scope tbody > tr",
+                  "fields": {
+                    "timestamp": [
+                      {
+                        "css": ":scope td:nth-of-type(1)"
+                      }
+                    ],
+                    "direction": [
+                      {
+                        "css": ":scope td:nth-of-type(2)"
+                      }
+                    ],
+                    "sender": [
+                      {
+                        "css": ":scope td:nth-of-type(3)"
+                      }
+                    ],
+                    "subject": [
+                      {
+                        "css": ":scope td:nth-of-type(4)"
+                      }
+                    ],
+                    "body": [
+                      {
+                        "css": ":scope td:nth-of-type(5)"
+                      }
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "name": "Calls",
+              "activate": {
+                "css": "a.rtsLink",
+                "text": "Calls"
+              },
+              "waitFor": "div.panel",
+              "fields": {},
+              "collections": {
+                "calls": {
+                  "container": "div.panel",
+                  "item": ":scope ul.call-log > li",
+                  "fields": {
+                    "timestamp": [
+                      {
+                        "css": ":scope span.call-date"
+                      }
+                    ],
+                    "direction": [
+                      {
+                        "css": ":scope span.call-dir"
+                      }
+                    ],
+                    "duration": [
+                      {
+                        "css": ":scope span.call-duration"
+                      }
+                    ],
+                    "outcome": [
+                      {
+                        "css": ":scope span.call-result"
+                      }
+                    ],
+                    "body": [
+                      {
+                        "css": ":scope div.call-notes"
+                      }
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "name": "Notes",
+              "activate": {
+                "css": "a.rtsLink",
+                "text": "Notes"
+              },
+              "waitFor": "div.panel",
+              "fields": {},
+              "collections": {
+                "notes": {
+                  "container": "div.panel",
+                  "item": ":scope div.notes-list > div",
+                  "fields": {
+                    "author": [
+                      {
+                        "css": ":scope b.note-author"
+                      }
+                    ],
+                    "timestamp": [
+                      {
+                        "css": ":scope span.note-date"
+                      }
+                    ],
+                    "body": [
+                      {
+                        "css": ":scope p.note-body"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "samples": [
+            "http://localhost:4101/vinconnect/customer?GlobalCustomerID=1001",
+            "http://localhost:4101/vinconnect/customer?GlobalCustomerID=1003"
+          ],
+          "required": [
+            "full_name"
+          ],
+          "expectOneOf": [
+            "email",
+            "phone_mobile",
+            "phone_home"
+          ],
+          "validation": {
+            "at": "2026-10-01T13:23:05.941Z",
+            "ok": true,
+            "first": {
+              "fields": 14,
+              "collections": {
+                "text_messages": 4,
+                "emails": 2,
+                "calls": 1,
+                "notes": 1
+              },
+              "errors": []
+            },
+            "second": {
+              "fields": 14,
+              "collections": {
+                "text_messages": 2,
+                "emails": 1,
+                "calls": 2,
+                "notes": 1
+              },
+              "errors": []
+            }
+          }
+        },
+        {
+          "id": "lead_list",
+          "role": "list",
+          "entity": "lead",
+          "recordPageType": "customer",
+          "urlRegex": "^/vinconnect/(?=$|[?#])",
+          "frame": {
+            "urlRegex": "^/CarDashboard/Pages/LeadManagement/ActiveLeads\\.aspx(?=$|[?#])"
+          },
+          "items": {
+            "container": "tbody",
+            "item": ":scope > tr",
+            "fields": {
+              "link": [
+                {
+                  "css": ":scope a",
+                  "attr": "href"
+                }
+              ],
+              "title": [
+                {
+                  "css": ":scope a"
+                }
+              ]
+            }
+          },
+          "samples": [
+            "http://localhost:4101/vinconnect/"
+          ],
+          "validation": {
+            "at": "2026-10-01T13:23:07.871Z",
+            "ok": true,
+            "first": {
+              "rows": 5
+            }
+          }
+        }
+      ],
+      "history": [
+        {
+          "version": 3,
+          "mappedAt": "2026-10-01T13:23:07.871Z",
+          "reason": "daily refresh",
+          "pageTypes": [
+            "customer",
+            "lead_list"
+          ]
+        },
+        {
+          "version": 2,
+          "mappedAt": "2026-09-30T13:21:47.337Z",
+          "reason": "scratch test",
+          "pageTypes": [
+            "customer",
+            "lead_list"
+          ]
+        },
+        {
+          "version": 1,
+          "mappedAt": "2026-09-30T11:51:33.723Z",
+          "reason": "scratch test",
+          "pageTypes": [
+            "customer_record"
+          ]
+        }
+      ],
+      "lastAttempt": {
+        "at": "2026-10-01T13:23:07.871Z",
+        "ok": true,
+        "reason": "daily refresh"
+      }
+    },
+    "cdk": {
+      "name": "CDK eLeads (mock)",
+      "match": {
+        "hosts": [
+          "localhost:4102"
+        ]
+      },
+      "version": 2,
+      "mappedAt": "2026-09-30T13:22:56.811Z",
+      "mappedBy": "mapper-agent (gpt-5.6-luna)",
+      "pageTypes": [
+        {
+          "id": "customer",
+          "role": "record",
+          "entity": "customer",
+          "description": "Customer profile record for John Doe",
+          "urlRegex": "^/elead/app\\.html#/customer/([^/?&#]+)/",
+          "frame": null,
+          "views": [
+            {
+              "name": "Profile",
+              "activate": {
+                "css": "a[role=\"tab\"]",
+                "text": "Profile"
+              },
+              "waitFor": "h1.cdk-customer-header__name",
+              "fields": {
+                "full_name": [
+                  {
+                    "css": "h1.cdk-customer-header__name"
+                  }
+                ],
+                "lead_status": [
+                  {
+                    "css": "span.cdk-badge"
+                  }
+                ],
+                "first_name": [
+                  {
+                    "css": "div[data-field=\"firstName\"]"
+                  },
+                  {
+                    "label": "First Name"
+                  }
+                ],
+                "last_name": [
+                  {
+                    "css": "div[data-field=\"lastName\"]"
+                  },
+                  {
+                    "label": "Last Name"
+                  }
+                ],
+                "email": [
+                  {
+                    "css": "div[data-field=\"email\"]"
+                  },
+                  {
+                    "label": "Primary Email"
+                  }
+                ],
+                "phone_mobile": [
+                  {
+                    "css": "div[data-field=\"mobilePhone\"]"
+                  },
+                  {
+                    "label": "Mobile Phone"
+                  }
+                ],
+                "phone_home": [
+                  {
+                    "css": "div[data-field=\"homePhone\"]"
+                  },
+                  {
+                    "label": "Home Phone"
+                  }
+                ],
+                "address": [
+                  {
+                    "css": "div[data-field=\"street\"]"
+                  },
+                  {
+                    "label": "Street"
+                  }
+                ],
+                "city": [
+                  {
+                    "css": "div[data-field=\"city\"]"
+                  },
+                  {
+                    "label": "City"
+                  }
+                ],
+                "state": [
+                  {
+                    "css": "div[data-field=\"state\"]"
+                  },
+                  {
+                    "label": "State"
+                  }
+                ],
+                "zip": [
+                  {
+                    "css": "div[data-field=\"postalCode\"]"
+                  },
+                  {
+                    "label": "Postal Code"
+                  }
+                ],
+                "vehicle_year": [
+                  {
+                    "css": "div[data-field=\"year\"]"
+                  },
+                  {
+                    "label": "Year"
+                  }
+                ],
+                "vehicle_make": [
+                  {
+                    "css": "div[data-field=\"make\"]"
+                  },
+                  {
+                    "label": "Make"
+                  }
+                ],
+                "vehicle_model": [
+                  {
+                    "css": "div[data-field=\"model\"]"
+                  },
+                  {
+                    "label": "Model"
+                  }
+                ],
+                "vin": [
+                  {
+                    "css": "div[data-field=\"vin\"]"
+                  },
+                  {
+                    "label": "VIN"
+                  }
+                ],
+                "stock_number": [
+                  {
+                    "css": "div[data-field=\"stock\"]"
+                  },
+                  {
+                    "label": "Stock Number"
+                  }
+                ],
+                "lead_source": [
+                  {
+                    "css": "div[data-field=\"source\"]"
+                  },
+                  {
+                    "label": "Source"
+                  }
+                ],
+                "salesperson": [
+                  {
+                    "css": "div[data-field=\"assignedTo\"]"
+                  },
+                  {
+                    "label": "Assigned To"
+                  }
+                ],
+                "created_date": [
+                  {
+                    "css": "div[data-field=\"created\"]"
+                  },
+                  {
+                    "label": "Created"
+                  }
+                ]
+              },
+              "collections": {}
+            },
+            {
+              "name": "Communications",
+              "activate": {
+                "css": "a[role=\"tab\"]",
+                "text": "Communications"
+              },
+              "waitFor": "ol.cdk-timeline",
+              "fields": {
+                "customer_id": [
+                  {
+                    "css": "span.cdk-customer-header__id"
+                  },
+                  {
+                    "label": "Active - Working"
+                  }
+                ]
+              },
+              "collections": {
+                "communications": {
+                  "container": "ol.cdk-timeline",
+                  "item": ":scope > li",
+                  "fields": {
+                    "timestamp": [
+                      {
+                        "css": ":scope time.cdk-timeline__time"
+                      }
+                    ],
+                    "direction": [
+                      {
+                        "css": ":scope",
+                        "attr": "data-direction"
+                      }
+                    ],
+                    "channel": [
+                      {
+                        "css": ":scope",
+                        "attr": "class",
+                        "regex": "--(call|email|sms)"
+                      }
+                    ],
+                    "sender": [
+                      {
+                        "css": ":scope span.cdk-timeline__author"
+                      }
+                    ],
+                    "subject": [
+                      {
+                        "css": ":scope div.cdk-timeline__subject"
+                      }
+                    ],
+                    "body": [
+                      {
+                        "css": ":scope p.cdk-timeline__text"
+                      }
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "name": "Notes",
+              "activate": {
+                "css": "a[role=\"tab\"]",
+                "text": "Notes"
+              },
+              "waitFor": "section.cdk-card",
+              "fields": {},
+              "collections": {
+                "notes": {
+                  "container": "section.cdk-card",
+                  "item": ":scope ul.cdk-notes > li",
+                  "fields": {
+                    "author": [
+                      {
+                        "css": ":scope span.cdk-note__author"
+                      }
+                    ],
+                    "timestamp": [
+                      {
+                        "css": ":scope time.cdk-note__date"
+                      }
+                    ],
+                    "body": [
+                      {
+                        "css": ":scope p.cdk-note__text"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "samples": [
+            "http://localhost:4102/elead/app.html#/customer/1001/profile",
+            "http://localhost:4102/elead/app.html#/customer/1002/profile"
+          ],
+          "required": [
+            "first_name",
+            "last_name",
+            "full_name"
+          ],
+          "expectOneOf": [
+            "email",
+            "phone_mobile"
+          ],
+          "validation": {
+            "at": "2026-09-30T13:22:55.624Z",
+            "ok": true,
+            "first": {
+              "fields": 20,
+              "collections": {
+                "communications": 7,
+                "notes": 1
+              },
+              "errors": []
+            },
+            "second": {
+              "fields": 19,
+              "collections": {
+                "communications": 4,
+                "notes": 1
+              },
+              "errors": []
+            }
+          }
+        },
+        {
+          "id": "customer_list",
+          "role": "list",
+          "entity": "customer",
+          "recordPageType": "customer",
+          "urlRegex": "^/elead/app\\.html(?=[?#])(?=[^#]*#/customers(?=$|[?/]))",
+          "frame": null,
+          "items": {
+            "container": "tbody",
+            "item": ":scope > tr",
+            "fields": {
+              "link": [
+                {
+                  "css": ":scope a",
+                  "attr": "href"
+                }
+              ],
+              "title": [
+                {
+                  "css": ":scope a"
+                }
+              ]
+            }
+          },
+          "samples": [
+            "http://localhost:4102/elead/app.html#/customers"
+          ],
+          "validation": {
+            "at": "2026-09-30T13:22:56.811Z",
+            "ok": true,
+            "first": {
+              "rows": 5
+            }
+          }
+        }
+      ],
+      "history": [
+        {
+          "version": 2,
+          "mappedAt": "2026-09-30T13:22:56.811Z",
+          "reason": "scratch test",
+          "pageTypes": [
+            "customer",
+            "customer_list"
+          ]
+        },
+        {
+          "version": 1,
+          "mappedAt": "2026-09-30T11:52:12.507Z",
+          "reason": "scratch test",
+          "pageTypes": [
+            "customer_record"
+          ]
+        }
+      ],
+      "lastAttempt": {
+        "at": "2026-09-30T13:22:56.811Z",
+        "ok": true,
+        "reason": "scratch test"
+      }
+    },
+    "sugar": {
+      "name": "SugarLike (mock)",
+      "match": {
+        "hosts": [
+          "localhost:4103"
+        ]
+      },
+      "startUrl": "http://localhost:4103/app/",
+      "version": 3,
+      "mappedAt": "2026-10-01T13:28:14.515Z",
+      "mappedBy": "mapper-agent (gpt-5.6-luna)",
+      "pageTypes": [
+        {
+          "id": "contact",
+          "role": "record",
+          "entity": "contact",
+          "description": "John Doe contact record details",
+          "urlRegex": "^/app/\\?action=DetailView&module=Contacts&record=([^/?&#]+)(?=$|[?&#])",
+          "frame": null,
+          "views": [
+            {
+              "name": "Details",
+              "activate": null,
+              "waitFor": null,
+              "fields": {
+                "full_name": [
+                  {
+                    "css": "#record-name"
+                  }
+                ],
+                "first_name": [
+                  {
+                    "css": "div[data-key=\"first_name\"]"
+                  }
+                ],
+                "last_name": [
+                  {
+                    "css": "div[data-key=\"last_name\"]"
+                  }
+                ],
+                "company": [
+                  {
+                    "css": "div[data-key=\"account\"]"
+                  }
+                ],
+                "job_title": [
+                  {
+                    "css": "div[data-key=\"title\"]"
+                  }
+                ],
+                "email": [
+                  {
+                    "css": "div[data-key=\"email\"]"
+                  },
+                  {
+                    "label": "Email Primary"
+                  }
+                ],
+                "phone_home": [
+                  {
+                    "css": "div[data-key=\"phone_home\"]"
+                  },
+                  {
+                    "label": "Phone Home"
+                  }
+                ],
+                "phone_mobile": [
+                  {
+                    "css": "div[data-key=\"phone_mobile\"]"
+                  },
+                  {
+                    "label": "Phone Mobile"
+                  }
+                ],
+                "lead_source": [
+                  {
+                    "css": "div[data-key=\"lead_source\"]"
+                  },
+                  {
+                    "label": "Lead Source"
+                  }
+                ],
+                "lead_status": [
+                  {
+                    "css": "div[data-key=\"status\"]"
+                  },
+                  {
+                    "label": "Status"
+                  }
+                ],
+                "salesperson": [
+                  {
+                    "css": "div[data-key=\"owner\"]"
+                  },
+                  {
+                    "label": "Assigned to"
+                  }
+                ],
+                "created_date": [
+                  {
+                    "css": "div[data-key=\"created\"]"
+                  },
+                  {
+                    "label": "Created"
+                  }
+                ],
+                "address": [
+                  {
+                    "css": "div[data-key=\"address\"]"
+                  },
+                  {
+                    "label": "Primary Address"
+                  }
+                ]
+              },
+              "collections": {
+                "history": {
+                  "container": "div.subpanel-outer.History > div.subpanel-body > div.of-data-table",
+                  "item": ":scope > div.of-data-table-row.row-editable",
+                  "fields": {
+                    "subject": [
+                      {
+                        "css": ":scope a.of-link"
+                      }
+                    ],
+                    "status": [
+                      {
+                        "css": ":scope div.field-value:nth-of-type(2)"
+                      }
+                    ],
+                    "timestamp": [
+                      {
+                        "css": ":scope div.field-value:nth-of-type(3)"
+                      }
+                    ],
+                    "sender": [
+                      {
+                        "css": ":scope div.field-value:nth-of-type(4)"
+                      }
+                    ],
+                    "body": [
+                      {
+                        "css": ":scope div.field-value:nth-of-type(1)"
+                      }
+                    ],
+                    "link": [
+                      {
+                        "css": ":scope a.of-link",
+                        "attr": "href"
+                      }
+                    ]
+                  },
+                  "detailPageType": "contact_history_entry"
+                },
+                "text_messages": {
+                  "container": "div.sg-texts",
+                  "item": ":scope > div",
+                  "fields": {
+                    "timestamp": [
+                      {
+                        "css": ":scope span.sg-text-when"
+                      }
+                    ],
+                    "sender": [
+                      {
+                        "css": ":scope span.sg-text-who"
+                      }
+                    ],
+                    "body": [
+                      {
+                        "css": ":scope div.sg-text-body"
+                      }
+                    ],
+                    "direction": [
+                      {
+                        "css": ":scope",
+                        "attr": "class",
+                        "regex": "sg-text--(inbound|outbound)"
+                      }
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "name": "Addresses",
+              "activate": {
+                "css": "a.sg-tab",
+                "text": "Addresses",
+                "kind": "link"
+              },
+              "waitFor": "#record-name",
+              "fields": {
+                "city": [
+                  {
+                    "css": "div[data-key=\"mailing_city\"]"
+                  },
+                  {
+                    "label": "Mailing City"
+                  }
+                ],
+                "zip": [
+                  {
+                    "css": "div[data-key=\"mailing_zip\"]"
+                  },
+                  {
+                    "label": "Mailing Postal Code"
+                  }
+                ],
+                "country": [
+                  {
+                    "css": "div[data-key=\"country\"]"
+                  },
+                  {
+                    "label": "Country"
+                  }
+                ]
+              },
+              "collections": {}
+            },
+            {
+              "name": "Activities",
+              "activate": {
+                "css": "button.subpanel-toggle",
+                "text": "Activities",
+                "kind": "expander"
+              },
+              "waitFor": "div.subpanel-outer.Activities > div.subpanel-body > div.of-data-table",
+              "fields": {
+                "state": [
+                  {
+                    "css": "div[data-key=\"address\"]",
+                    "regex": ",\\s*([A-Z]{2})\\b"
+                  },
+                  {
+                    "label": "Primary Address",
+                    "regex": ",\\s*([A-Z]{2})\\b"
+                  }
+                ]
+              },
+              "collections": {
+                "activities": {
+                  "container": "div.subpanel-outer.Activities > div.subpanel-body > div.of-data-table",
+                  "item": ":scope > div",
+                  "fields": {
+                    "subject": [
+                      {
+                        "css": ":scope div.field-value:nth-of-type(1)"
+                      }
+                    ],
+                    "direction": [
+                      {
+                        "css": ":scope div.field-value:nth-of-type(2)"
+                      }
+                    ],
+                    "timestamp": [
+                      {
+                        "css": ":scope div.field-value:nth-of-type(3)"
+                      }
+                    ],
+                    "duration": [
+                      {
+                        "css": ":scope div.field-value:nth-of-type(4)"
+                      }
+                    ],
+                    "body": [
+                      {
+                        "css": ":scope div.field-value:nth-of-type(5)"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "tabShapes": [
+            "^/app/\\?action=Addresses&module=Contacts&record=([^/?&#]+)(?=$|[?&#])"
+          ],
+          "samples": [
+            "http://localhost:4103/app/?action=DetailView&module=Contacts&record=c0000000-0000-4000-8000-000000001001",
+            "http://localhost:4103/app/?action=DetailView&module=Contacts&record=c0000000-0000-4000-8000-000000001002"
+          ],
+          "required": [
+            "first_name",
+            "last_name",
+            "full_name"
+          ],
+          "expectOneOf": [
+            "email",
+            "phone_mobile"
+          ],
+          "validation": {
+            "at": "2026-10-01T13:27:58.276Z",
+            "ok": true,
+            "first": {
+              "fields": 17,
+              "collections": {
+                "history": 3,
+                "text_messages": 4,
+                "activities": 2
+              },
+              "errors": []
+            },
+            "second": {
+              "fields": 16,
+              "collections": {
+                "history": 2,
+                "text_messages": 3,
+                "activities": 0
+              },
+              "errors": []
+            }
+          }
+        },
+        {
+          "id": "contact_history_entry",
+          "role": "message",
+          "description": "Email detail with subject, sender, recipient, status, timestamp, and message body",
+          "urlRegex": "^/app/\\?action=DetailView&module=Emails&record=([^/?&#]+)(?=$|[?&#])",
+          "frame": null,
+          "views": [
+            {
+              "name": "Main",
+              "activate": null,
+              "waitFor": "div[data-key=\"subject\"]",
+              "fields": {
+                "subject": [
+                  {
+                    "css": "div[data-key=\"subject\"]"
+                  },
+                  {
+                    "label": "Subject"
+                  }
+                ],
+                "sender": [
+                  {
+                    "css": "div[data-key=\"from\"]"
+                  },
+                  {
+                    "label": "From"
+                  }
+                ],
+                "recipient": [
+                  {
+                    "css": "div[data-key=\"to\"]"
+                  },
+                  {
+                    "label": "To"
+                  }
+                ],
+                "timestamp": [
+                  {
+                    "css": "div[data-key=\"date\"]"
+                  },
+                  {
+                    "label": "Date Sent"
+                  }
+                ],
+                "status": [
+                  {
+                    "css": "div[data-key=\"status\"]"
+                  },
+                  {
+                    "label": "Status"
+                  }
+                ],
+                "body": [
+                  {
+                    "css": "div.sg-email-body"
+                  }
+                ]
+              },
+              "collections": {}
+            }
+          ],
+          "samples": [
+            "http://localhost:4103/app/?action=DetailView&module=Emails&record=e0000000-0000-4000-8000-000000010010",
+            "http://localhost:4103/app/?action=DetailView&module=Emails&record=e0000000-0000-4000-8000-000000010011"
+          ],
+          "required": [
+            "body",
+            "subject"
+          ],
+          "expectOneOf": [],
+          "validation": {
+            "at": "2026-10-01T13:28:10.711Z",
+            "ok": true,
+            "first": {
+              "fields": 6,
+              "collections": {},
+              "errors": []
+            },
+            "second": {
+              "fields": 6,
+              "collections": {},
+              "errors": []
+            }
+          }
+        },
+        {
+          "id": "contact_list",
+          "role": "list",
+          "entity": "contact",
+          "recordPageType": "contact",
+          "urlRegex": "^/app/(?=[?#])(?=[^#]*[?&]module=Contacts(?:&|#|$))(?=[^#]*[?&]action=index(?:&|#|$))",
+          "frame": null,
+          "items": {
+            "container": "#contacts-table",
+            "item": ":scope > div.of-data-table-row.row-editable",
+            "fields": {
+              "link": [
+                {
+                  "css": ":scope a.of-link",
+                  "attr": "href"
+                }
+              ],
+              "title": [
+                {
+                  "css": ":scope a.of-link"
+                }
+              ]
+            }
+          },
+          "samples": [
+            "http://localhost:4103/app/?module=Contacts&action=index"
+          ],
+          "validation": {
+            "at": "2026-10-01T13:28:12.615Z",
+            "ok": true,
+            "first": {
+              "rows": 3
+            }
+          }
+        },
+        {
+          "id": "contact_list_2",
+          "role": "list",
+          "entity": "contact",
+          "recordPageType": "contact",
+          "urlRegex": "^/app/(?=$|[?#])",
+          "frame": null,
+          "items": {
+            "container": "div.of-data-table",
+            "item": ":scope > div",
+            "fields": {
+              "link": [
+                {
+                  "css": ":scope div.field-value:nth-of-type(2) > a.of-link",
+                  "attr": "href"
+                }
+              ],
+              "title": [
+                {
+                  "css": ":scope div.field-value:nth-of-type(2) > a.of-link"
+                }
+              ]
+            }
+          },
+          "samples": [
+            "http://localhost:4103/app/"
+          ],
+          "validation": {
+            "at": "2026-10-01T13:28:14.514Z",
+            "ok": true,
+            "first": {
+              "rows": 4
+            }
+          }
+        }
+      ],
+      "history": [
+        {
+          "version": 3,
+          "mappedAt": "2026-10-01T13:28:14.515Z",
+          "reason": "scratch test",
+          "pageTypes": [
+            "contact",
+            "contact_history_entry",
+            "contact_list",
+            "contact_list_2"
+          ]
+        },
+        {
+          "version": 2,
+          "mappedAt": "2026-09-30T13:24:40.969Z",
+          "reason": "scratch test",
+          "pageTypes": [
+            "contact",
+            "contact_history_entry",
+            "contact_list"
+          ]
+        },
+        {
+          "version": 1,
+          "mappedAt": "2026-09-30T12:47:21.294Z",
+          "reason": "scratch test",
+          "pageTypes": [
+            "contact",
+            "contact_history_entry",
+            "contact_list"
+          ]
+        }
+      ],
+      "lastAttempt": {
+        "at": "2026-10-01T13:28:14.515Z",
+        "ok": true,
+        "reason": "scratch test"
+      }
+    },
+    "demo-1crmcloud-com": {
+      "name": "demo.1crmcloud.com",
+      "match": {
+        "hosts": [
+          "demo.1crmcloud.com"
+        ]
+      },
+      "startUrl": "https://demo.1crmcloud.com/app/",
+      "version": 5,
+      "mappedAt": "2026-10-01T08:50:35.982Z",
+      "mappedBy": "extension (no AI)",
+      "pageTypes": [
+        {
+          "id": "contact",
+          "role": "record",
+          "entity": "contact",
+          "description": "Contact record for Osvaldo Mcgriff",
+          "urlRegex": "^/app/\\?action=DetailView&module=Contacts&record=([^/?&#]+)(?=$|[?&#])",
+          "frame": null,
+          "views": [
+            {
+              "name": "Main",
+              "activate": null,
+              "waitFor": null,
+              "fields": {
+                "first_name": [
+                  {
+                    "css": "#first_name-main > div.of-field-body > div.of-field-inner > div.of-field-content-text"
+                  }
+                ],
+                "last_name": [
+                  {
+                    "css": "div[data-test=\"last_name\"] > div.editable-element > div.of-field.of--inline.of--label-empty > div.of-field-main > div.of-field-body > div.of-field-inner > div.of-field-content-text"
+                  }
+                ],
+                "company": [
+                  {
+                    "css": "div[data-test=\"primary_account\"] > div.editable-element > div.of-field.of--inline.of--label-empty > div.of-field-main > div.of-field-body > div.of-field-inner > a.of-link.of--link"
+                  }
+                ],
+                "job_title": [
+                  {
+                    "css": "div[data-test=\"title\"] > div.editable-element > div.of-field.of--inline.of--label-empty > div.of-field-main > div.of-field-body > div.of-field-inner > div.of-field-content-text"
+                  }
+                ],
+                "email": [
+                  {
+                    "css": "div.of-field-content-text > a.of-link.of--link"
+                  }
+                ],
+                "phone_work": [
+                  {
+                    "css": "div[data-test=\"phone_work\"] > div.editable-element > div.of-field.of--inline.of--cursor-normal > div.of-field-main > div.of-field-body > div.of-field-inner > div.of-field-content-text > a"
+                  }
+                ],
+                "phone_home": [
+                  {
+                    "css": "div[data-test=\"phone_home\"] > div.editable-element > div.of-field.of--inline.of--cursor-normal > div.of-field-main > div.of-field-body > div.of-field-inner > div.of-field-content-text > a"
+                  }
+                ],
+                "phone_mobile": [
+                  {
+                    "css": "div[data-test=\"phone_mobile\"] > div.editable-element > div.of-field.of--inline.of--cursor-normal > div.of-field-main > div.of-field-body > div.of-field-inner > div.of-field-content-text > a"
+                  }
+                ],
+                "salesperson": [
+                  {
+                    "css": "#assigned_user_uv7yrklf-main > div.of-field-body > div.of-field-inner > a.of-link.of--link"
+                  }
+                ],
+                "created_date": [
+                  {
+                    "css": "div[aria-label=\"Created\"]"
+                  }
+                ],
+                "modified_date": [
+                  {
+                    "css": "div[aria-label=\"Modified\"]"
+                  }
+                ],
+                "last_activity_date": [
+                  {
+                    "css": "div[aria-label=\"Last Activity\"]"
+                  }
+                ],
+                "lead_source": [
+                  {
+                    "css": "div[aria-label=\"Lead Source\"]"
+                  }
+                ],
+                "business_role": [
+                  {
+                    "css": "div[aria-label=\"Business Role\"]"
+                  }
+                ],
+                "campaign": [
+                  {
+                    "css": "div.of-field-inner > span"
+                  }
+                ],
+                "accounting_contact": [
+                  {
+                    "css": "input[name=\"email_accounts\"]"
+                  }
+                ],
+                "address": [
+                  {
+                    "css": "span[data-test=\"formatted-address\"]"
+                  },
+                  {
+                    "label": "Primary Address"
+                  }
+                ],
+                "state": [
+                  {
+                    "css": "span[data-test=\"formatted-address\"]",
+                    "regex": ",\\s*([A-Z]{2})\\b"
+                  },
+                  {
+                    "label": "Primary Address",
+                    "regex": ",\\s*([A-Z]{2})\\b"
+                  }
+                ],
+                "zip": [
+                  {
+                    "css": "span[data-test=\"formatted-address\"]",
+                    "regex": "\\b(\\d{5}(?:-\\d{4})?)\\b"
+                  },
+                  {
+                    "label": "Primary Address",
+                    "regex": "\\b(\\d{5}(?:-\\d{4})?)\\b"
+                  }
+                ],
+                "other_address": [
+                  {
+                    "css": "div[data-test=\"formatted-address\"] > div.of-field-content-text"
+                  },
+                  {
+                    "label": "Other Address"
+                  }
+                ],
+                "language": [
+                  {
+                    "css": "div[aria-label=\"Language\"]"
+                  }
+                ],
+                "signature_type": [
+                  {
+                    "css": "div[aria-label=\"Signature Type\"]"
+                  }
+                ],
+                "second_authentication_factor": [
+                  {
+                    "css": "div[aria-label=\"Second Authentication Factor\"]"
+                  }
+                ]
+              },
+              "collections": {}
+            }
+          ],
+          "samples": [
+            "https://demo.1crmcloud.com/app/?action=DetailView&module=Contacts&record=22f5ab1f-2070-a19b-f852-6abd83d4802e",
+            "https://demo.1crmcloud.com/app/?action=DetailView&module=Contacts&record=b0a3600c-e345-d481-b67e-6abd833033af"
+          ],
+          "required": [
+            "first_name",
+            "last_name"
+          ],
+          "expectOneOf": [
+            "email",
+            "phone_mobile",
+            "phone_home",
+            "phone_work"
+          ],
+          "validation": {
+            "at": "2026-10-01T08:45:33.930Z",
+            "ok": true,
+            "first": {
+              "fields": 22,
+              "collections": {},
+              "errors": []
+            },
+            "second": {
+              "fields": 22,
+              "collections": {},
+              "errors": []
+            }
+          }
+        },
+        {
+          "id": "contact_list",
+          "role": "list",
+          "entity": "contact",
+          "recordPageType": "contact",
+          "urlRegex": "^/app/(?=$|[?#])",
+          "frame": null,
+          "items": {
+            "container": "#of-data-table-1",
+            "fields": {
+              "link": [
+                {
+                  "attr": "href",
+                  "css": ":scope div.add-icon > a.of-link.of--link"
+                }
+              ],
+              "title": [
+                {
+                  "css": ":scope div.add-icon > a.of-link.of--link"
+                }
+              ]
+            },
+            "item": ":scope > div.of-data-table-row.row-editable"
+          },
+          "samples": [
+            "https://demo.1crmcloud.com/app/"
+          ],
+          "validation": {
+            "at": "2026-10-01T08:50:26.958Z",
+            "ok": true,
+            "first": {
+              "rows": 5
+            }
+          }
+        },
+        {
+          "id": "contact_list_2",
+          "role": "list",
+          "entity": "contact",
+          "recordPageType": "contact",
+          "urlRegex": "^/app/(?=[?#])(?=[^#]*[?&]module=Contacts(?:&|#|$))(?=[^#]*[?&]action=index(?:&|#|$))",
+          "frame": null,
+          "items": {
+            "container": "#of-data-table-1",
+            "fields": {
+              "link": [
+                {
+                  "attr": "href",
+                  "css": ":scope div.add-fields > a.of-link.of--link"
+                }
+              ],
+              "title": [
+                {
+                  "css": ":scope div.add-fields > a.of-link.of--link"
+                }
+              ]
+            },
+            "item": ":scope > div.of-data-table-row.row-editable"
+          },
+          "samples": [
+            "https://demo.1crmcloud.com/app/?module=Contacts&action=index&list_offset=1&list_limit=20"
+          ],
+          "validation": {
+            "at": "2026-10-01T08:50:35.981Z",
+            "ok": true,
+            "first": {
+              "rows": 20
+            }
+          }
+        }
+      ],
+      "history": [
+        {
+          "version": 5,
+          "mappedAt": "2026-10-01T08:50:35.982Z",
+          "reason": "lists found during a whole-CRM capture",
+          "pageTypes": [
+            "contact_list",
+            "contact_list_2"
+          ]
+        },
+        {
+          "version": 4,
+          "mappedAt": "2026-10-01T08:45:38.942Z",
+          "reason": "requested from settings",
+          "pageTypes": [
+            "contact"
+          ]
+        },
+        {
+          "version": 3,
+          "mappedAt": "2026-10-01T08:33:16.060Z",
+          "reason": "lists found during a whole-CRM capture",
+          "pageTypes": [
+            "contact_list"
+          ]
+        },
+        {
+          "version": 2,
+          "mappedAt": "2026-09-30T15:22:18.363Z",
+          "reason": "requested from settings",
+          "pageTypes": [
+            "contact"
+          ]
+        },
+        {
+          "version": 1,
+          "mappedAt": "2026-09-30T14:16:52.360Z",
+          "reason": "requested from the popup",
+          "pageTypes": [
+            "contact"
+          ]
+        }
+      ],
+      "lastAttempt": {
+        "at": "2026-10-01T08:50:35.982Z",
+        "ok": true,
+        "reason": "lists found during a whole-CRM capture"
+      }
+    },
+    "suite8demo-suiteondemand-com": {
+      "name": "suite8demo.suiteondemand.com",
+      "match": {
+        "hosts": [
+          "suite8demo.suiteondemand.com"
+        ]
+      },
+      "startUrl": "https://suite8demo.suiteondemand.com/#/home",
+      "version": 1,
+      "mappedAt": "2026-10-01T09:50:10.983Z",
+      "mappedBy": "extension (server)",
+      "pageTypes": [
+        {
+          "id": "lead",
+          "role": "record",
+          "entity": "lead",
+          "description": "Jennie Madison lead record",
+          "urlRegex": "^/#/leads/record/([^/?&#]+)(?=$|[?&#])",
+          "frame": null,
+          "views": [
+            {
+              "name": "OVERVIEW",
+              "activate": {
+                "css": "a[role=\"tab\"]",
+                "text": "OVERVIEW"
+              },
+              "waitFor": "scrm-dynamic-field.dynamic-field.dynamic-field-mode-detail.dynamic-field-name-full_name > div:nth-of-type(1) > div.d-flex.w-100.flex-grow-1 > scrm-group-field.flex-grow-1 > div.align-items-start.d-flex.field-group > div.field-group-item.d-flex.justify-content-end:nth-of-type(2) > span.field-group-field.pr-1 > scrm-dynamic-field.dynamic-field.dynamic-field-mode-detail.dynamic-field-type-varchar > div:nth-of-type(1) > div.d-flex.w-100.flex-grow-1 > scrm-varchar-detail.flex-grow-1",
+              "fields": {
+                "first_name": [
+                  {
+                    "css": "scrm-dynamic-field.dynamic-field.dynamic-field-mode-detail.dynamic-field-name-full_name > div:nth-of-type(1) > div.d-flex.w-100.flex-grow-1 > scrm-group-field.flex-grow-1 > div.align-items-start.d-flex.field-group > div.field-group-item.d-flex.justify-content-end:nth-of-type(2) > span.field-group-field.pr-1 > scrm-dynamic-field.dynamic-field.dynamic-field-mode-detail.dynamic-field-type-varchar > div:nth-of-type(1) > div.d-flex.w-100.flex-grow-1 > scrm-varchar-detail.flex-grow-1"
+                  }
+                ],
+                "last_name": [
+                  {
+                    "css": "scrm-dynamic-field.dynamic-field.dynamic-field-mode-detail.dynamic-field-name-full_name > div:nth-of-type(1) > div.d-flex.w-100.flex-grow-1 > scrm-group-field.flex-grow-1 > div.align-items-start.d-flex.field-group > div.field-group-item.d-flex.justify-content-end:nth-of-type(3) > span.field-group-field.pr-1 > scrm-dynamic-field.dynamic-field.dynamic-field-mode-detail.dynamic-field-type-varchar > div:nth-of-type(1) > div.d-flex.w-100.flex-grow-1 > scrm-varchar-detail.flex-grow-1"
+                  }
+                ],
+                "salesperson": [
+                  {
+                    "css": "scrm-relate-detail"
+                  }
+                ],
+                "job_title": [
+                  {
+                    "css": "scrm-dynamic-field.dynamic-field.dynamic-field-mode-detail.dynamic-field-name-title > div:nth-of-type(1) > div.d-flex.w-100.flex-grow-1 > scrm-varchar-detail.flex-grow-1"
+                  }
+                ],
+                "phone_mobile": [
+                  {
+                    "css": "scrm-dynamic-field.dynamic-field.dynamic-field-mode-detail.dynamic-field-name-phone_mobile > div:nth-of-type(1) > div.d-flex.w-100.flex-grow-1 > scrm-phone-detail.flex-grow-1 > a"
+                  }
+                ],
+                "phone_work": [
+                  {
+                    "css": "scrm-dynamic-field.dynamic-field.dynamic-field-mode-detail.dynamic-field-name-phone_work > div:nth-of-type(1) > div.d-flex.w-100.flex-grow-1 > scrm-phone-detail.flex-grow-1 > a"
+                  }
+                ],
+                "company": [
+                  {
+                    "css": "scrm-dynamic-field.dynamic-field.dynamic-field-mode-detail.dynamic-field-name-account_name > div:nth-of-type(1) > div.d-flex.w-100.flex-grow-1 > scrm-varchar-detail.flex-grow-1"
+                  }
+                ],
+                "website": [
+                  {
+                    "css": "scrm-url-detail.flex-grow-1 > a"
+                  }
+                ],
+                "address": [
+                  {
+                    "css": "scrm-dynamic-field.dynamic-field.dynamic-field-mode-detail.dynamic-field-name-primary_address_street > div:nth-of-type(1) > div.d-flex.w-100.flex-grow-1 > scrm-text-detail.flex-grow-1 > pre.detail-pre-styling"
+                  }
+                ],
+                "zip": [
+                  {
+                    "css": "scrm-dynamic-field.dynamic-field.dynamic-field-mode-detail.dynamic-field-name-primary_address_postalcode > div:nth-of-type(1) > div.d-flex.w-100.flex-grow-1 > scrm-varchar-detail.flex-grow-1"
+                  }
+                ],
+                "city": [
+                  {
+                    "css": "scrm-dynamic-field.dynamic-field.dynamic-field-mode-detail.dynamic-field-name-primary_address_city > div:nth-of-type(1) > div.d-flex.w-100.flex-grow-1 > scrm-varchar-detail.flex-grow-1"
+                  }
+                ],
+                "country": [
+                  {
+                    "css": "scrm-dynamic-field.dynamic-field.dynamic-field-mode-detail.dynamic-field-name-primary_address_country > div:nth-of-type(1) > div.d-flex.w-100.flex-grow-1 > scrm-varchar-detail.flex-grow-1"
+                  }
+                ],
+                "email": [
+                  {
+                    "css": "a.clickable.field-link"
+                  }
+                ],
+                "days_open": [
+                  {
+                    "css": "scrm-dynamic-field.dynamic-field.dynamic-field-mode-list.dynamic-field-type-string > div:nth-of-type(1) > div.d-flex.w-100.flex-grow-1 > scrm-varchar-detail.flex-grow-1"
+                  }
+                ]
+              },
+              "collections": {}
+            },
+            {
+              "name": "MORE INFORMATION",
+              "activate": {
+                "css": "a[role=\"tab\"]",
+                "text": "MORE INFORMATION"
+              },
+              "waitFor": "span.dynamic-label",
+              "fields": {
+                "full_name": [
+                  {
+                    "css": "span.dynamic-label"
+                  }
+                ],
+                "lead_status": [
+                  {
+                    "css": "scrm-dynamic-field.dynamic-field.dynamic-field-mode-detail.dynamic-field-name-status > div:nth-of-type(1) > div.d-flex.w-100.flex-grow-1 > scrm-dropdownenum-detail.flex-grow-1"
+                  }
+                ],
+                "lead_source": [
+                  {
+                    "css": "scrm-dynamic-field.dynamic-field.dynamic-field-mode-detail.dynamic-field-name-lead_source > div:nth-of-type(1) > div.d-flex.w-100.flex-grow-1 > scrm-dropdownenum-detail.flex-grow-1"
+                  }
+                ],
+                "activities_count": [
+                  {
+                    "css": "div.col-auto.mr-3.insight-panel-card:nth-of-type(1) > scrm-grid-widget > div.grid-widget.d-flex.flex-column > div.align-items-center.d-flex.justify-content-end > div.font-weight-bolder.statistics-sidebar-widget-col.sub-panel-banner-value > div.widget-entry-value > scrm-field.field.field-mode-list.field-type-int > scrm-dynamic-field.dynamic-field.dynamic-field-mode-list.dynamic-field-type-int > div:nth-of-type(1) > div.d-flex.w-100.flex-grow-1 > scrm-int-detail.flex-grow-1"
+                  }
+                ],
+                "history_count": [
+                  {
+                    "css": "div.col-auto.mr-3.insight-panel-card:nth-of-type(2) > scrm-grid-widget > div.grid-widget.d-flex.flex-column > div.align-items-center.d-flex.justify-content-end > div.font-weight-bolder.statistics-sidebar-widget-col.sub-panel-banner-value > div.widget-entry-value > scrm-field.field.field-mode-list.field-type-int > scrm-dynamic-field.dynamic-field.dynamic-field-mode-list.dynamic-field-type-int > div:nth-of-type(1) > div.d-flex.w-100.flex-grow-1 > scrm-int-detail.flex-grow-1"
+                  }
+                ],
+                "campaigns_count": [
+                  {
+                    "css": "div.col-auto.mr-3.insight-panel-card:nth-of-type(3) > scrm-grid-widget > div.grid-widget.d-flex.flex-column > div.align-items-center.d-flex.justify-content-end > div.font-weight-bolder.statistics-sidebar-widget-col.sub-panel-banner-value > div.widget-entry-value > scrm-field.field.field-mode-list.field-type-int > scrm-dynamic-field.dynamic-field.dynamic-field-mode-list.dynamic-field-type-int > div:nth-of-type(1) > div.d-flex.w-100.flex-grow-1 > scrm-int-detail.flex-grow-1"
+                  }
+                ],
+                "events_count": [
+                  {
+                    "css": "div.col-auto.mr-3.insight-panel-card:nth-of-type(4) > scrm-grid-widget > div.grid-widget.d-flex.flex-column > div.align-items-center.d-flex.justify-content-end > div.font-weight-bolder.statistics-sidebar-widget-col.sub-panel-banner-value > div.widget-entry-value > scrm-field.field.field-mode-list.field-type-int > scrm-dynamic-field.dynamic-field.dynamic-field-mode-list.dynamic-field-type-int > div:nth-of-type(1) > div.d-flex.w-100.flex-grow-1 > scrm-int-detail.flex-grow-1"
+                  }
+                ]
+              },
+              "collections": {}
+            },
+            {
+              "name": "OTHER",
+              "activate": {
+                "css": "a[role=\"tab\"]",
+                "text": "OTHER"
+              },
+              "waitFor": "span.dynamic-label",
+              "fields": {
+                "date_modified": [
+                  {
+                    "css": "scrm-dynamic-field.dynamic-field.dynamic-field-mode-detail.dynamic-field-name-date_modified > div:nth-of-type(1) > div.d-flex.w-100.flex-grow-1 > scrm-datetime-detail.flex-grow-1 > span"
+                  }
+                ],
+                "created_date": [
+                  {
+                    "css": "scrm-dynamic-field.dynamic-field.dynamic-field-mode-detail.dynamic-field-name-date_entered > div:nth-of-type(1) > div.d-flex.w-100.flex-grow-1 > scrm-datetime-detail.flex-grow-1 > span"
+                  }
+                ]
+              },
+              "collections": {}
+            },
+            {
+              "name": "Relationships",
+              "activate": {
+                "css": "a.clickable",
+                "kind": "expander",
+                "text": "Relationships"
+              },
+              "waitFor": "span.dynamic-label",
+              "fields": {
+                "security_groups_count": [
+                  {
+                    "css": "tr.insight-panel.sub-panel-banner-body-table-row:nth-of-type(2) > td.sub-panel-banner-body-table-col:nth-of-type(1) > div.insight-panel-card.border-insight.pl-2 > scrm-grid-widget > div.grid-widget.d-flex.flex-column > div.align-items-center.d-flex.justify-content-end > div.font-weight-bolder.statistics-sidebar-widget-col.sub-panel-banner-value > div.widget-entry-value > scrm-field.field.field-mode-list.field-type-int > scrm-dynamic-field.dynamic-field.dynamic-field-mode-list.dynamic-field-type-int > div:nth-of-type(1) > div.d-flex.w-100.flex-grow-1 > scrm-int-detail.flex-grow-1"
+                  }
+                ]
+              },
+              "collections": {}
+            }
+          ],
+          "samples": [
+            "https://suite8demo.suiteondemand.com/#/leads/record/dc1518bf-fa06-403f-8caf-d6005e8899f0"
+          ],
+          "required": [
+            "first_name",
+            "last_name",
+            "full_name"
+          ],
+          "expectOneOf": [
+            "email",
+            "phone_mobile",
+            "phone_work"
+          ],
+          "validation": {
+            "at": "2026-10-01T09:49:59.957Z",
+            "ok": true,
+            "first": {
+              "fields": 20,
+              "collections": {},
+              "errors": []
+            },
+            "second": null
+          }
+        }
+      ],
+      "history": [
+        {
+          "version": 1,
+          "mappedAt": "2026-10-01T09:50:10.983Z",
+          "reason": "requested from the popup",
+          "pageTypes": [
+            "lead"
+          ]
+        }
+      ],
+      "lastAttempt": {
+        "at": "2026-10-01T10:57:18.091Z",
+        "ok": false,
+        "reason": "extraction failed (no first_name, no last_name, no full_name, no email or phone_mobile or phone_work, OVERVIEW: tab not found, MORE INFORMATION: tab not found, OTHER: tab not found, Relationships: tab not found)",
+        "error": "no pages showing a person were found"
+      }
+    },
+    "demo-us-espocrm-com": {
+      "name": "demo.us.espocrm.com",
+      "match": {
+        "hosts": [
+          "demo.us.espocrm.com"
+        ]
+      },
+      "startUrl": "https://demo.us.espocrm.com/",
+      "version": 1,
+      "mappedAt": "2026-10-01T11:25:33.951Z",
+      "mappedBy": "extension (server)",
+      "pageTypes": [
+        {
+          "id": "contact",
+          "role": "record",
+          "entity": "contact",
+          "description": "Frederick Devine contact record",
+          "urlRegex": "^/#Contact/view/([^/?&#]+)(?=$|[?&#])",
+          "frame": null,
+          "views": [
+            {
+              "name": "Contact",
+              "activate": {
+                "css": "button.btn.btn-text",
+                "text": "Contact"
+              },
+              "waitFor": "div[data-name=\"opportunities\"] > div.list-container > div.list",
+              "fields": {
+                "full_name": [
+                  {
+                    "css": "div[data-name=\"name\"] > div[data-name=\"name\"]"
+                  },
+                  {
+                    "label": "Name"
+                  }
+                ],
+                "company": [
+                  {
+                    "css": "div.link-multiple-item > a.text-record"
+                  }
+                ],
+                "email": [
+                  {
+                    "css": "div[data-name=\"emailAddress\"] > div > a.selectable > span"
+                  }
+                ],
+                "phone_mobile": [
+                  {
+                    "css": "div[data-name=\"phoneNumber\"] > div > a.selectable > span"
+                  }
+                ],
+                "zip": [
+                  {
+                    "css": "div[data-name=\"address\"] > div[data-name=\"address\"]",
+                    "regex": "(\\d{5}(?:-\\d{4})?)"
+                  },
+                  {
+                    "label": "Address",
+                    "regex": "(\\d{5}(?:-\\d{4})?)"
+                  }
+                ],
+                "country": [
+                  {
+                    "css": "div[data-name=\"address\"] > div[data-name=\"address\"]",
+                    "regex": "(\\w+)\\s*$"
+                  },
+                  {
+                    "label": "Address",
+                    "regex": "(\\w+)\\s*$"
+                  }
+                ],
+                "created_date": [
+                  {
+                    "css": "span[data-name=\"createdAt\"] > span"
+                  }
+                ]
+              },
+              "collections": {
+                "opportunities": {
+                  "container": "div[data-name=\"opportunities\"] > div.list-container > div.list",
+                  "fields": {
+                    "amount": [
+                      {
+                        "css": ":scope span.numeric-text"
+                      }
+                    ],
+                    "link": [
+                      {
+                        "attr": "href",
+                        "css": ":scope a.link"
+                      }
+                    ],
+                    "status": [
+                      {
+                        "css": ":scope span.label.label-md.label-state"
+                      }
+                    ],
+                    "subject": [
+                      {
+                        "css": ":scope a.link"
+                      }
+                    ]
+                  },
+                  "item": ":scope tbody > tr"
+                }
+              }
+            },
+            {
+              "name": "Stream",
+              "activate": {
+                "css": "button.btn.btn-text",
+                "text": "Stream"
+              },
+              "waitFor": "div.list-container:nth-of-type(3)",
+              "fields": {},
+              "collections": {
+                "history": {
+                  "container": "div.list-container:nth-of-type(3)",
+                  "fields": {
+                    "author": [
+                      {
+                        "css": ":scope a.text-record"
+                      }
+                    ],
+                    "link": [
+                      {
+                        "attr": "href",
+                        "css": ":scope a.text-record"
+                      }
+                    ],
+                    "timestamp": [
+                      {
+                        "css": ":scope a.text-muted.small"
+                      }
+                    ]
+                  },
+                  "item": ":scope ul.list-group > li"
+                }
+              }
+            }
+          ],
+          "samples": [
+            "https://demo.us.espocrm.com/#Contact/view/67d18fd9385c09281",
+            "https://demo.us.espocrm.com/#Contact/view/5f607b7ac109b5cca"
+          ],
+          "required": [
+            "full_name"
+          ],
+          "expectOneOf": [
+            "email",
+            "phone_mobile"
+          ],
+          "validation": {
+            "at": "2026-10-01T11:25:17.940Z",
+            "ok": true,
+            "first": {
+              "fields": 7,
+              "collections": {
+                "history": 1,
+                "opportunities": 1
+              },
+              "errors": []
+            },
+            "second": {
+              "fields": 7,
+              "collections": {
+                "history": 5,
+                "opportunities": 0
+              },
+              "errors": []
+            }
+          }
+        },
+        {
+          "id": "contact_list",
+          "role": "list",
+          "entity": "contact",
+          "recordPageType": "contact",
+          "urlRegex": "^/(?=[?#])(?=[^#]*#Contact(?=$|[?]))",
+          "frame": null,
+          "items": {
+            "container": "tbody",
+            "fields": {
+              "link": [
+                {
+                  "attr": "href",
+                  "css": ":scope a.link"
+                }
+              ],
+              "title": [
+                {
+                  "css": ":scope a.link"
+                }
+              ]
+            },
+            "item": ":scope > tr"
+          },
+          "samples": [
+            "https://demo.us.espocrm.com/#Contact"
+          ],
+          "validation": {
+            "at": "2026-10-01T11:25:33.949Z",
+            "ok": true,
+            "first": {
+              "rows": 20
+            }
+          }
+        }
+      ],
+      "history": [
+        {
+          "version": 1,
+          "mappedAt": "2026-10-01T11:25:33.951Z",
+          "reason": "requested from the popup",
+          "pageTypes": [
+            "contact",
+            "contact_list"
+          ]
+        }
+      ],
+      "lastAttempt": {
+        "at": "2026-10-01T11:25:33.951Z",
+        "ok": true,
+        "reason": "requested from the popup"
+      }
+    },
+    "demo-dolibarr-org": {
+      "name": "demo.dolibarr.org",
+      "match": {
+        "hosts": [
+          "demo.dolibarr.org"
+        ]
+      },
+      "version": 0,
+      "mappedAt": null,
+      "pageTypes": [],
+      "history": [],
+      "lastAttempt": {
+        "at": "2026-10-01T14:39:24.952Z",
+        "ok": false,
+        "reason": "requested from the capture window",
+        "error": "no pages showing internal users, agents and employees were found: start the mapping from their list page"
+      }
+    },
+    "app-unify-app-connectcdk-com": {
+      "name": "app-unify.app.connectcdk.com",
+      "match": {
+        "hosts": [
+          "app-unify.app.connectcdk.com",
+          "crm.connectcdk.com"
+        ]
+      },
+      "startUrl": "https://app-unify.app.connectcdk.com/applications",
+      "targets": [
+        "users",
+        "customers",
+        "deals",
+        "appointments",
+        "tasks",
+        "vehicles"
+      ],
+      "version": 2,
+      "mappedAt": "2026-10-05T14:01:30.509Z",
+      "mappedBy": "extension (server)",
+      "pageTypes": [
+        {
+          "id": "vehicle_search_screen",
+          "role": "screen",
+          "dataset": "vehicles",
+          "entity": "Vehicle Search",
+          "description": "Vehicle Search: the list reached by clicking \"CRM\" > \"Vehicle Search\"",
+          "urlRegex": "(?!)",
+          "path": [
+            {
+              "label": "CRM",
+              "nav": {
+                "css": "div.bPuebU",
+                "kind": "nav",
+                "text": "CRM"
+              },
+              "frameHost": "app-unify.app.connectcdk.com"
+            },
+            {
+              "label": "Vehicle Search",
+              "nav": {
+                "css": "a[role=\"menuitem\"].ui-menu-item-wrapper",
+                "kind": "nav",
+                "text": "Vehicle Search"
+              },
+              "frameHost": "crm.connectcdk.com"
+            }
+          ],
+          "frameHost": "crm.connectcdk.com",
+          "table": {
+            "container": "div.inventory-search",
+            "headers": [
+              "Image",
+              "Stock #",
+              "Year",
+              "Make",
+              "Model",
+              "Trim",
+              "N/U/T",
+              "Mileage",
+              "Age",
+              "Ext. Color",
+              "Int. Color",
+              "VIN",
+              "Transmission",
+              "Engine",
+              "WheelBase",
+              "Retail",
+              "Internet",
+              "Status",
+              "Location",
+              "DMS Status"
+            ],
+            "offset": 0,
+            "row": ":scope div:nth-of-type(2) > div:nth-of-type(2) > div > table.noprint > tbody > tr",
+            "columns": [
+              {
+                "index": 1,
+                "key": "stock_number"
+              },
+              {
+                "index": 2,
+                "key": "vehicle_year"
+              },
+              {
+                "index": 3,
+                "key": "vehicle_make"
+              },
+              {
+                "index": 4,
+                "key": "vehicle_model"
+              },
+              {
+                "index": 5,
+                "key": "trim"
+              },
+              {
+                "index": 6,
+                "key": "condition"
+              },
+              {
+                "index": 7,
+                "key": "mileage"
+              },
+              {
+                "index": 8,
+                "key": "age"
+              },
+              {
+                "index": 9,
+                "key": "exterior_color"
+              },
+              {
+                "index": 10,
+                "key": "interior_color"
+              },
+              {
+                "index": 11,
+                "key": "vin"
+              },
+              {
+                "index": 12,
+                "key": "transmission"
+              },
+              {
+                "index": 13,
+                "key": "engine"
+              },
+              {
+                "index": 14,
+                "key": "wheel_base"
+              },
+              {
+                "index": 15,
+                "key": "price"
+              },
+              {
+                "index": 16,
+                "key": "internet_price"
+              },
+              {
+                "index": 17,
+                "key": "status"
+              },
+              {
+                "index": 18,
+                "key": "location"
+              },
+              {
+                "index": 19,
+                "key": "dms_status"
+              }
+            ]
+          },
+          "required": [
+            "stock_number"
+          ],
+          "samples": [],
+          "validation": {
+            "at": "2026-10-05T13:52:52.129Z",
+            "ok": true,
+            "first": {
+              "rows": 6,
+              "columns": [
+                "stock_number",
+                "vehicle_year",
+                "vehicle_make",
+                "vehicle_model",
+                "trim",
+                "condition",
+                "mileage",
+                "age",
+                "exterior_color",
+                "interior_color",
+                "vin",
+                "transmission",
+                "engine",
+                "wheel_base",
+                "price",
+                "internet_price",
+                "status",
+                "location",
+                "dms_status"
+              ]
+            }
+          }
+        },
+        {
+          "id": "vehicle_search_screen_2",
+          "role": "screen",
+          "dataset": "vehicles",
+          "entity": "Vehicle Search",
+          "description": "Vehicle Search: the list reached by clicking \"CRM\" > \"Vehicle Search\" > \"Prospects\"",
+          "urlRegex": "(?!)",
+          "path": [
+            {
+              "label": "CRM",
+              "nav": {
+                "css": "div.bPuebU",
+                "kind": "nav",
+                "text": "CRM"
+              },
+              "frameHost": "app-unify.app.connectcdk.com"
+            },
+            {
+              "label": "Vehicle Search",
+              "nav": {
+                "css": "a[role=\"menuitem\"].ui-menu-item-wrapper",
+                "kind": "nav",
+                "text": "Vehicle Search"
+              },
+              "frameHost": "crm.connectcdk.com"
+            },
+            {
+              "label": "Prospects",
+              "nav": {
+                "css": "span.icon-address-book.icon-address-book-black",
+                "kind": "nav",
+                "text": "Prospects"
+              },
+              "frameHost": "crm.connectcdk.com"
+            }
+          ],
+          "frameHost": "crm.connectcdk.com",
+          "table": {
+            "container": "div.inventory-search",
+            "headers": [
+              "Image",
+              "Stock #",
+              "Year",
+              "Make",
+              "Model",
+              "Trim",
+              "N/U/T",
+              "Mileage",
+              "Age",
+              "Ext. Color",
+              "Int. Color",
+              "VIN",
+              "Transmission",
+              "Engine",
+              "WheelBase",
+              "Retail",
+              "Internet",
+              "Status",
+              "Location",
+              "DMS Status"
+            ],
+            "offset": 0,
+            "row": ":scope div:nth-of-type(2) > div:nth-of-type(2) > div > table.noprint > tbody > tr",
+            "columns": [
+              {
+                "index": 1,
+                "key": "stock_number"
+              },
+              {
+                "index": 2,
+                "key": "vehicle_year"
+              },
+              {
+                "index": 3,
+                "key": "vehicle_make"
+              },
+              {
+                "index": 4,
+                "key": "vehicle_model"
+              },
+              {
+                "index": 5,
+                "key": "trim"
+              },
+              {
+                "index": 6,
+                "key": "condition"
+              },
+              {
+                "index": 7,
+                "key": "mileage"
+              },
+              {
+                "index": 8,
+                "key": "age"
+              },
+              {
+                "index": 9,
+                "key": "exterior_color"
+              },
+              {
+                "index": 10,
+                "key": "interior_color"
+              },
+              {
+                "index": 11,
+                "key": "vin"
+              },
+              {
+                "index": 12,
+                "key": "transmission"
+              },
+              {
+                "index": 13,
+                "key": "engine"
+              },
+              {
+                "index": 14,
+                "key": "wheel_base"
+              },
+              {
+                "index": 15,
+                "key": "price"
+              },
+              {
+                "index": 16,
+                "key": "internet_price"
+              },
+              {
+                "index": 17,
+                "key": "status"
+              },
+              {
+                "index": 18,
+                "key": "location"
+              },
+              {
+                "index": 19,
+                "key": "dms_status"
+              }
+            ]
+          },
+          "required": [
+            "stock_number"
+          ],
+          "samples": [],
+          "validation": {
+            "at": "2026-10-05T13:53:12.600Z",
+            "ok": true,
+            "first": {
+              "rows": 6,
+              "columns": [
+                "stock_number",
+                "vehicle_year",
+                "vehicle_make",
+                "vehicle_model",
+                "trim",
+                "condition",
+                "mileage",
+                "age",
+                "exterior_color",
+                "interior_color",
+                "vin",
+                "transmission",
+                "engine",
+                "wheel_base",
+                "price",
+                "internet_price",
+                "status",
+                "location",
+                "dms_status"
+              ]
+            }
+          }
+        },
+        {
+          "id": "vehicle_search_screen_3",
+          "role": "screen",
+          "dataset": "vehicles",
+          "entity": "Vehicle Search",
+          "description": "Vehicle Search: the list reached by clicking \"CRM\" > \"Vehicle Search\" > \"Prospects\" > \"Customer\"",
+          "urlRegex": "(?!)",
+          "path": [
+            {
+              "label": "CRM",
+              "nav": {
+                "css": "div.bPuebU",
+                "kind": "nav",
+                "text": "CRM"
+              },
+              "frameHost": "app-unify.app.connectcdk.com"
+            },
+            {
+              "label": "Vehicle Search",
+              "nav": {
+                "css": "a[role=\"menuitem\"].ui-menu-item-wrapper",
+                "kind": "nav",
+                "text": "Vehicle Search"
+              },
+              "frameHost": "crm.connectcdk.com"
+            },
+            {
+              "label": "Prospects",
+              "nav": {
+                "css": "span.icon-address-book.icon-address-book-black",
+                "kind": "nav",
+                "text": "Prospects"
+              },
+              "frameHost": "crm.connectcdk.com"
+            },
+            {
+              "label": "Customer",
+              "nav": {
+                "css": "span.icon-Content-Switcher",
+                "kind": "nav",
+                "text": "Customer"
+              },
+              "frameHost": "crm.connectcdk.com"
+            }
+          ],
+          "frameHost": "crm.connectcdk.com",
+          "table": {
+            "container": "div.inventory-search",
+            "headers": [
+              "Image",
+              "Stock #",
+              "Year",
+              "Make",
+              "Model",
+              "Trim",
+              "N/U/T",
+              "Mileage",
+              "Age",
+              "Ext. Color",
+              "Int. Color",
+              "VIN",
+              "Transmission",
+              "Engine",
+              "WheelBase",
+              "Retail",
+              "Internet",
+              "Status",
+              "Location",
+              "DMS Status"
+            ],
+            "offset": 0,
+            "row": ":scope div:nth-of-type(2) > div:nth-of-type(2) > div > table.noprint > tbody > tr",
+            "columns": [
+              {
+                "index": 1,
+                "key": "stock_number"
+              },
+              {
+                "index": 2,
+                "key": "vehicle_year"
+              },
+              {
+                "index": 3,
+                "key": "vehicle_make"
+              },
+              {
+                "index": 4,
+                "key": "vehicle_model"
+              },
+              {
+                "index": 5,
+                "key": "trim"
+              },
+              {
+                "index": 6,
+                "key": "condition"
+              },
+              {
+                "index": 7,
+                "key": "mileage"
+              },
+              {
+                "index": 8,
+                "key": "age"
+              },
+              {
+                "index": 9,
+                "key": "exterior_color"
+              },
+              {
+                "index": 10,
+                "key": "interior_color"
+              },
+              {
+                "index": 11,
+                "key": "vin"
+              },
+              {
+                "index": 12,
+                "key": "transmission"
+              },
+              {
+                "index": 13,
+                "key": "engine"
+              },
+              {
+                "index": 14,
+                "key": "wheel_base"
+              },
+              {
+                "index": 15,
+                "key": "price"
+              },
+              {
+                "index": 16,
+                "key": "internet_price"
+              },
+              {
+                "index": 17,
+                "key": "status"
+              },
+              {
+                "index": 18,
+                "key": "location"
+              },
+              {
+                "index": 19,
+                "key": "dms_status"
+              }
+            ]
+          },
+          "required": [
+            "stock_number"
+          ],
+          "samples": [],
+          "validation": {
+            "at": "2026-10-05T13:53:33.498Z",
+            "ok": true,
+            "first": {
+              "rows": 6,
+              "columns": [
+                "stock_number",
+                "vehicle_year",
+                "vehicle_make",
+                "vehicle_model",
+                "trim",
+                "condition",
+                "mileage",
+                "age",
+                "exterior_color",
+                "interior_color",
+                "vin",
+                "transmission",
+                "engine",
+                "wheel_base",
+                "price",
+                "internet_price",
+                "status",
+                "location",
+                "dms_status"
+              ]
+            }
+          }
+        },
+        {
+          "id": "vehicle_search_screen_4",
+          "role": "screen",
+          "dataset": "vehicles",
+          "entity": "Vehicle Search",
+          "description": "Vehicle Search: the list reached by clicking \"CRM\" > \"Vehicle Search\" > \"Prospects\" > \"Customer\" > \"Organizer\"",
+          "urlRegex": "(?!)",
+          "path": [
+            {
+              "label": "CRM",
+              "nav": {
+                "css": "div.bPuebU",
+                "kind": "nav",
+                "text": "CRM"
+              },
+              "frameHost": "app-unify.app.connectcdk.com"
+            },
+            {
+              "label": "Vehicle Search",
+              "nav": {
+                "css": "a[role=\"menuitem\"].ui-menu-item-wrapper",
+                "kind": "nav",
+                "text": "Vehicle Search"
+              },
+              "frameHost": "crm.connectcdk.com"
+            },
+            {
+              "label": "Prospects",
+              "nav": {
+                "css": "span.icon-address-book.icon-address-book-black",
+                "kind": "nav",
+                "text": "Prospects"
+              },
+              "frameHost": "crm.connectcdk.com"
+            },
+            {
+              "label": "Customer",
+              "nav": {
+                "css": "span.icon-Content-Switcher",
+                "kind": "nav",
+                "text": "Customer"
+              },
+              "frameHost": "crm.connectcdk.com"
+            },
+            {
+              "label": "Organizer",
+              "nav": {
+                "css": "span.icon-calendar.icon-calendar-black",
+                "kind": "nav",
+                "text": "Organizer"
+              },
+              "frameHost": "crm.connectcdk.com"
+            }
+          ],
+          "frameHost": "crm.connectcdk.com",
+          "table": {
+            "container": "div.inventory-search",
+            "headers": [
+              "Image",
+              "Stock #",
+              "Year",
+              "Make",
+              "Model",
+              "Trim",
+              "N/U/T",
+              "Mileage",
+              "Age",
+              "Ext. Color",
+              "Int. Color",
+              "VIN",
+              "Transmission",
+              "Engine",
+              "WheelBase",
+              "Retail",
+              "Internet",
+              "Status",
+              "Location",
+              "DMS Status"
+            ],
+            "offset": 0,
+            "row": ":scope div:nth-of-type(2) > div:nth-of-type(2) > div > table.noprint > tbody > tr",
+            "columns": [
+              {
+                "index": 1,
+                "key": "stock_number"
+              },
+              {
+                "index": 2,
+                "key": "vehicle_year"
+              },
+              {
+                "index": 3,
+                "key": "vehicle_make"
+              },
+              {
+                "index": 4,
+                "key": "vehicle_model"
+              },
+              {
+                "index": 5,
+                "key": "trim"
+              },
+              {
+                "index": 6,
+                "key": "condition"
+              },
+              {
+                "index": 7,
+                "key": "mileage"
+              },
+              {
+                "index": 8,
+                "key": "age"
+              },
+              {
+                "index": 9,
+                "key": "exterior_color"
+              },
+              {
+                "index": 10,
+                "key": "interior_color"
+              },
+              {
+                "index": 11,
+                "key": "vin"
+              },
+              {
+                "index": 12,
+                "key": "transmission"
+              },
+              {
+                "index": 13,
+                "key": "engine"
+              },
+              {
+                "index": 14,
+                "key": "wheel_base"
+              },
+              {
+                "index": 15,
+                "key": "price"
+              },
+              {
+                "index": 16,
+                "key": "internet_price"
+              },
+              {
+                "index": 17,
+                "key": "status"
+              },
+              {
+                "index": 18,
+                "key": "location"
+              },
+              {
+                "index": 19,
+                "key": "dms_status"
+              }
+            ]
+          },
+          "required": [
+            "stock_number"
+          ],
+          "samples": [],
+          "validation": {
+            "at": "2026-10-05T13:53:52.690Z",
+            "ok": true,
+            "first": {
+              "rows": 6,
+              "columns": [
+                "stock_number",
+                "vehicle_year",
+                "vehicle_make",
+                "vehicle_model",
+                "trim",
+                "condition",
+                "mileage",
+                "age",
+                "exterior_color",
+                "interior_color",
+                "vin",
+                "transmission",
+                "engine",
+                "wheel_base",
+                "price",
+                "internet_price",
+                "status",
+                "location",
+                "dms_status"
+              ]
+            }
+          }
+        },
+        {
+          "id": "prospect_search_results_screen",
+          "role": "screen",
+          "dataset": "customers",
+          "entity": "Prospect Search Results",
+          "description": "Prospect Search Results: the list reached by clicking \"CRM\" > \"Vehicle Search\" > \"Prospects\" > \"Active\" > \"Organizer\"",
+          "urlRegex": "(?!)",
+          "path": [
+            {
+              "label": "CRM",
+              "nav": {
+                "css": "div.bPuebU",
+                "kind": "nav",
+                "text": "CRM"
+              },
+              "frameHost": "app-unify.app.connectcdk.com"
+            },
+            {
+              "label": "Vehicle Search",
+              "nav": {
+                "css": "a[role=\"menuitem\"].ui-menu-item-wrapper",
+                "kind": "nav",
+                "text": "Vehicle Search"
+              },
+              "frameHost": "crm.connectcdk.com"
+            },
+            {
+              "label": "Prospects",
+              "nav": {
+                "css": "span.icon-address-book.icon-address-book-black",
+                "kind": "nav",
+                "text": "Prospects"
+              },
+              "frameHost": "crm.connectcdk.com"
+            },
+            {
+              "label": "Active",
+              "nav": {
+                "css": "a[role=\"menuitem\"].ui-menu-item-wrapper",
+                "kind": "nav",
+                "text": "Active"
+              },
+              "frameHost": "crm.connectcdk.com"
+            },
+            {
+              "label": "Organizer",
+              "nav": {
+                "css": "span.icon-calendar.icon-calendar-black",
+                "kind": "nav",
+                "text": "Organizer"
+              },
+              "frameHost": "crm.connectcdk.com"
+            }
+          ],
+          "frameHost": "crm.connectcdk.com",
+          "table": {
+            "container": "table.ui-datepicker-calendar",
+            "headers": [
+              "Su",
+              "Mo",
+              "Tu",
+              "We",
+              "Th",
+              "Fr",
+              "Sa"
+            ],
+            "offset": 0,
+            "row": ":scope tbody > tr",
+            "columns": [
+              {
+                "index": 0,
+                "key": "su"
+              },
+              {
+                "index": 1,
+                "key": "mo"
+              },
+              {
+                "index": 2,
+                "key": "tu"
+              },
+              {
+                "index": 3,
+                "key": "we"
+              },
+              {
+                "index": 4,
+                "key": "th"
+              },
+              {
+                "index": 5,
+                "key": "fr"
+              },
+              {
+                "index": 6,
+                "key": "sa"
+              }
+            ]
+          },
+          "required": [],
+          "samples": [],
+          "validation": {
+            "at": "2026-10-05T13:55:57.406Z",
+            "ok": true,
+            "first": {
+              "rows": 5,
+              "columns": [
+                "su",
+                "mo",
+                "tu",
+                "we",
+                "th",
+                "fr",
+                "sa"
+              ]
+            }
+          }
+        },
+        {
+          "id": "prospect_search_result_screen",
+          "role": "screen",
+          "dataset": "customers",
+          "entity": "Prospect Search Result",
+          "description": "Prospect Search Result: the list reached by clicking \"CRM\" > \"Vehicle Search\" > \"Prospects\" > \"Active\" > \"Organizer\" > \"Customer\"",
+          "urlRegex": "(?!)",
+          "path": [
+            {
+              "label": "CRM",
+              "nav": {
+                "css": "div.bPuebU",
+                "kind": "nav",
+                "text": "CRM"
+              },
+              "frameHost": "app-unify.app.connectcdk.com"
+            },
+            {
+              "label": "Vehicle Search",
+              "nav": {
+                "css": "a[role=\"menuitem\"].ui-menu-item-wrapper",
+                "kind": "nav",
+                "text": "Vehicle Search"
+              },
+              "frameHost": "crm.connectcdk.com"
+            },
+            {
+              "label": "Prospects",
+              "nav": {
+                "css": "span.icon-address-book.icon-address-book-black",
+                "kind": "nav",
+                "text": "Prospects"
+              },
+              "frameHost": "crm.connectcdk.com"
+            },
+            {
+              "label": "Active",
+              "nav": {
+                "css": "a[role=\"menuitem\"].ui-menu-item-wrapper",
+                "kind": "nav",
+                "text": "Active"
+              },
+              "frameHost": "crm.connectcdk.com"
+            },
+            {
+              "label": "Organizer",
+              "nav": {
+                "css": "span.icon-calendar.icon-calendar-black",
+                "kind": "nav",
+                "text": "Organizer"
+              },
+              "frameHost": "crm.connectcdk.com"
+            },
+            {
+              "label": "Customer",
+              "nav": {
+                "css": "span.icon-Content-Switcher",
+                "kind": "nav",
+                "text": "Customer"
+              },
+              "frameHost": "crm.connectcdk.com"
+            }
+          ],
+          "frameHost": "crm.connectcdk.com",
+          "table": {
+            "container": "table.ui-datepicker-calendar",
+            "headers": [
+              "Su",
+              "Mo",
+              "Tu",
+              "We",
+              "Th",
+              "Fr",
+              "Sa"
+            ],
+            "offset": 0,
+            "row": ":scope tbody > tr",
+            "columns": [
+              {
+                "index": 0,
+                "key": "su"
+              },
+              {
+                "index": 1,
+                "key": "mo"
+              },
+              {
+                "index": 2,
+                "key": "tu"
+              },
+              {
+                "index": 3,
+                "key": "we"
+              },
+              {
+                "index": 4,
+                "key": "th"
+              },
+              {
+                "index": 5,
+                "key": "fr"
+              },
+              {
+                "index": 6,
+                "key": "sa"
+              }
+            ]
+          },
+          "required": [],
+          "samples": [],
+          "validation": {
+            "at": "2026-10-05T13:56:11.029Z",
+            "ok": true,
+            "first": {
+              "rows": 5,
+              "columns": [
+                "su",
+                "mo",
+                "tu",
+                "we",
+                "th",
+                "fr",
+                "sa"
+              ]
+            }
+          }
+        },
+        {
+          "id": "prospect_search_result_screen_4",
+          "role": "screen",
+          "dataset": "customers",
+          "entity": "Prospect Search Result",
+          "description": "Prospect Search Result: the list reached by clicking \"CRM\" > \"Vehicle Search\" > \"Prospects\" > \"Active\" > \"Admin\" > \"Organizer\"",
+          "urlRegex": "(?!)",
+          "path": [
+            {
+              "label": "CRM",
+              "nav": {
+                "css": "div.bPuebU",
+                "kind": "nav",
+                "text": "CRM"
+              },
+              "frameHost": "app-unify.app.connectcdk.com"
+            },
+            {
+              "label": "Vehicle Search",
+              "nav": {
+                "css": "a[role=\"menuitem\"].ui-menu-item-wrapper",
+                "kind": "nav",
+                "text": "Vehicle Search"
+              },
+              "frameHost": "crm.connectcdk.com"
+            },
+            {
+              "label": "Prospects",
+              "nav": {
+                "css": "span.icon-address-book.icon-address-book-black",
+                "kind": "nav",
+                "text": "Prospects"
+              },
+              "frameHost": "crm.connectcdk.com"
+            },
+            {
+              "label": "Active",
+              "nav": {
+                "css": "a[role=\"menuitem\"].ui-menu-item-wrapper",
+                "kind": "nav",
+                "text": "Active"
+              },
+              "frameHost": "crm.connectcdk.com"
+            },
+            {
+              "label": "Admin",
+              "nav": {
+                "css": "span.icon-cogs.icon-cogs-black",
+                "kind": "nav",
+                "text": "Admin"
+              },
+              "frameHost": "crm.connectcdk.com"
+            },
+            {
+              "label": "Organizer",
+              "nav": {
+                "css": "span.icon-calendar.icon-calendar-black",
+                "kind": "nav",
+                "text": "Organizer"
+              },
+              "frameHost": "crm.connectcdk.com"
+            }
+          ],
+          "frameHost": "crm.connectcdk.com",
+          "table": {
+            "container": "table.ui-datepicker-calendar",
+            "headers": [
+              "Su",
+              "Mo",
+              "Tu",
+              "We",
+              "Th",
+              "Fr",
+              "Sa"
+            ],
+            "offset": 0,
+            "row": ":scope tbody > tr",
+            "columns": [
+              {
+                "index": 0,
+                "key": "su"
+              },
+              {
+                "index": 1,
+                "key": "mo"
+              },
+              {
+                "index": 2,
+                "key": "tu"
+              },
+              {
+                "index": 3,
+                "key": "we"
+              },
+              {
+                "index": 4,
+                "key": "th"
+              },
+              {
+                "index": 5,
+                "key": "fr"
+              },
+              {
+                "index": 6,
+                "key": "sa"
+              }
+            ]
+          },
+          "required": [],
+          "samples": [],
+          "validation": {
+            "at": "2026-10-05T13:56:42.955Z",
+            "ok": true,
+            "first": {
+              "rows": 5,
+              "columns": [
+                "su",
+                "mo",
+                "tu",
+                "we",
+                "th",
+                "fr",
+                "sa"
+              ]
+            }
+          }
+        },
+        {
+          "id": "prospect_search_result_screen_5",
+          "role": "screen",
+          "dataset": "customers",
+          "entity": "Prospect Search Result",
+          "description": "Prospect Search Result: the list reached by clicking \"CRM\" > \"Vehicle Search\" > \"Prospects\" > \"Active\" > \"Admin\" > \"Customer\"",
+          "urlRegex": "(?!)",
+          "path": [
+            {
+              "label": "CRM",
+              "nav": {
+                "css": "div.bPuebU",
+                "kind": "nav",
+                "text": "CRM"
+              },
+              "frameHost": "app-unify.app.connectcdk.com"
+            },
+            {
+              "label": "Vehicle Search",
+              "nav": {
+                "css": "a[role=\"menuitem\"].ui-menu-item-wrapper",
+                "kind": "nav",
+                "text": "Vehicle Search"
+              },
+              "frameHost": "crm.connectcdk.com"
+            },
+            {
+              "label": "Prospects",
+              "nav": {
+                "css": "span.icon-address-book.icon-address-book-black",
+                "kind": "nav",
+                "text": "Prospects"
+              },
+              "frameHost": "crm.connectcdk.com"
+            },
+            {
+              "label": "Active",
+              "nav": {
+                "css": "a[role=\"menuitem\"].ui-menu-item-wrapper",
+                "kind": "nav",
+                "text": "Active"
+              },
+              "frameHost": "crm.connectcdk.com"
+            },
+            {
+              "label": "Admin",
+              "nav": {
+                "css": "span.icon-cogs.icon-cogs-black",
+                "kind": "nav",
+                "text": "Admin"
+              },
+              "frameHost": "crm.connectcdk.com"
+            },
+            {
+              "label": "Customer",
+              "nav": {
+                "css": "span.icon-Content-Switcher",
+                "kind": "nav",
+                "text": "Customer"
+              },
+              "frameHost": "crm.connectcdk.com"
+            }
+          ],
+          "frameHost": "crm.connectcdk.com",
+          "table": {
+            "container": "table.ui-datepicker-calendar",
+            "headers": [
+              "Su",
+              "Mo",
+              "Tu",
+              "We",
+              "Th",
+              "Fr",
+              "Sa"
+            ],
+            "offset": 0,
+            "row": ":scope tbody > tr",
+            "columns": [
+              {
+                "index": 0,
+                "key": "su"
+              },
+              {
+                "index": 1,
+                "key": "mo"
+              },
+              {
+                "index": 2,
+                "key": "tu"
+              },
+              {
+                "index": 3,
+                "key": "we"
+              },
+              {
+                "index": 4,
+                "key": "th"
+              },
+              {
+                "index": 5,
+                "key": "fr"
+              },
+              {
+                "index": 6,
+                "key": "sa"
+              }
+            ]
+          },
+          "required": [],
+          "samples": [],
+          "validation": {
+            "at": "2026-10-05T13:56:53.052Z",
+            "ok": true,
+            "first": {
+              "rows": 5,
+              "columns": [
+                "su",
+                "mo",
+                "tu",
+                "we",
+                "th",
+                "fr",
+                "sa"
+              ]
+            }
+          }
+        }
+      ],
+      "history": [
+        {
+          "version": 2,
+          "mappedAt": "2026-10-05T14:01:30.509Z",
+          "reason": "requested from the capture window",
+          "pageTypes": [
+            "vehicle_search_screen",
+            "vehicle_search_screen_2",
+            "vehicle_search_screen_3",
+            "vehicle_search_screen_4",
+            "prospect_search_results_screen",
+            "prospect_search_result_screen",
+            "prospect_search_result_screen_4",
+            "prospect_search_result_screen_5"
+          ]
+        },
+        {
+          "version": 1,
+          "mappedAt": "2026-10-05T13:47:09.662Z",
+          "reason": "requested from the capture window",
+          "pageTypes": [
+            "vehicle_search_screen",
+            "vehicle_search_screen_2",
+            "customers_recently_screen",
+            "prospect_search_results_screen",
+            "prospect_search_results_screen_2",
+            "prospect_search_result_screen_2"
+          ]
+        }
+      ],
+      "lastAttempt": {
+        "at": "2026-10-05T14:01:30.509Z",
+        "ok": true,
+        "reason": "requested from the capture window"
+      }
+    }
+  }
+}

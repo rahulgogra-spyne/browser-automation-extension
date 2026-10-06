@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Lead Capture – capture window</title>
+    <link rel="stylesheet" href="../popup/popup.css" />
+    <link rel="stylesheet" href="console.css" />
+  </head>
+  <body>
+    <main class="console">
+      <header class="console-head">
+        <div>
+          <h1>Lead Capture</h1>
+          <p class="muted">This window stays open while a CRM is mapped or captured. The CRM pages being read load in the tab next to this one.</p>
+          <p id="health" class="muted"></p>
+        </div>
+        <div class="row">
+          <select id="crm-select" title="A mapped CRM"></select>
+          <button id="capture-crm" type="button" class="primary">Capture whole CRM</button>
+          <button id="open-settings" type="button">Settings</button>
+        </div>
+      </header>
+
+      <section id="site" class="card site-card">
+        <div>
+          <h2 id="site-name">No CRM tab open</h2>
+          <p id="site-text" class="muted">Open a CRM in another tab; this window follows the tab you are using.</p>
+        </div>
+        <div class="row">
+          <button id="site-map" type="button" hidden>Map this CRM</button>
+          <button id="site-capture" type="button" class="primary" hidden>Capture whole CRM</button>
+        </div>
+      </section>
+
+      <section id="now" class="card">
+        <div class="now-head">
+          <h2 id="now-title">Idle</h2>
+          <span id="now-time" class="muted"></span>
+        </div>
+        <div class="map-bar"><div id="now-bar" class="map-bar-fill"></div></div>
+        <p id="now-phase" class="phase"></p>
+        <div id="now-counts" class="counts"></div>
+        <ol id="map-stages" class="map-stages" hidden></ol>
+        <div class="row">
+          <button id="cancel" type="button" hidden>Cancel</button>
+          <button id="clear" type="button" hidden>Done</button>
+          <span id="now-note" class="status"></span>
+        </div>
+      </section>
+
+      <div class="columns">
+        <section class="card">
+          <h2>Captured in this run</h2>
+          <table id="recent">
+            <thead><tr><th>Record</th><th>Kind</th><th>Fields</th><th>Messages</th><th></th></tr></thead>
+            <tbody></tbody>
+          </table>
+          <p id="recent-empty" class="muted">Nothing yet.</p>
+        </section>
+        <section class="card">
+          <h2>Today's files</h2>
+          <p id="today" class="muted"></p>
+          <div class="row">
+            <button id="open-folder" type="button">Open Downloads folder</button>
+            <button id="retry" type="button" hidden>Write CSV again</button>
+          </div>
+          <h2 class="log-title">Log</h2>
+          <pre id="log" class="map-log console-log"></pre>
+        </section>
+      </div>
+
+      <section class="card">
+        <h2>Map a CRM</h2>
+        <p class="muted">Sign in to the CRM in this browser first, then paste the address of its contacts or leads list (any page of it works).</p>
+        <div class="row">
+          <input id="map-url" type="url" placeholder="https://crm.example.com/contacts" />
+          <button id="map-crm" type="button">Map this CRM</button>
+        </div>
+      </section>
+    </main>
+    <script type="module" src="console.js"></script>
+  </body>
+</html>

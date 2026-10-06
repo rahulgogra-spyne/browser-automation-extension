@@ -1,0 +1,32 @@
+body { margin: 0; font: 14px/1.5 'Segoe UI', system-ui, sans-serif; color: #1c2430; background: #f4f6f9; }
+.cdk-login { display: grid; place-items: center; min-height: 100vh; }
+.cdk-login__form { display: flex; flex-direction: column; gap: 8px; width: 300px; padding: 24px; background: #fff; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,.1); }
+.cdk-login__form h1 { margin: 0 0 8px; font-size: 18px; }
+.cdk-login__form input { padding: 6px 8px; border: 1px solid #c4ccd6; border-radius: 4px; }
+.cdk-login__form button { margin-top: 8px; padding: 8px; color: #fff; background: #0b5cad; border: 0; border-radius: 4px; }
+.cdk-login__error { margin: 0; color: #b42318; }
+.cdk-topbar { display: flex; gap: 20px; align-items: center; padding: 10px 20px; color: #fff; background: #0b1f33; }
+.cdk-topbar__brand { font-weight: 600; }
+.cdk-mainnav { display: flex; gap: 14px; margin-left: auto; }
+.cdk-mainnav a { color: #cfe0f5; text-decoration: none; }
+.cdk-main { max-width: 900px; margin: 20px auto; padding: 0 16px; }
+.cdk-loading, .cdk-empty { color: #667085; }
+.cdk-customer-header { display: flex; gap: 12px; align-items: center; }
+.cdk-customer-header__name { margin: 0; font-size: 22px; }
+.cdk-badge { padding: 2px 8px; font-size: 12px; background: #e0ecfb; border-radius: 10px; }
+.cdk-customer-header__id { color: #667085; }
+.cdk-tabs { display: flex; gap: 4px; margin: 14px 0; border-bottom: 1px solid #d0d7e2; }
+.cdk-tab { padding: 8px 14px; color: #344054; text-decoration: none; border-bottom: 2px solid transparent; }
+.cdk-tab--active { color: #0b5cad; border-bottom-color: #0b5cad; }
+.cdk-tab__count { padding: 0 6px; font-size: 11px; background: #eef2f7; border-radius: 8px; }
+.cdk-card { margin-bottom: 14px; padding: 14px 16px; background: #fff; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,.06); }
+.cdk-card__title { margin: 0 0 8px; font-size: 15px; }
+.cdk-field, .ds-field { display: grid; grid-template-columns: 160px 1fr; padding: 3px 0; }
+.cdk-field__label, .ds-field-label { color: #667085; }
+.cdk-timeline, .activity-feed, .cdk-notes { margin: 0; padding: 0; list-style: none; }
+.cdk-timeline__item, .activity, .cdk-note { padding: 8px 0; border-bottom: 1px solid #eef2f7; }
+.cdk-timeline__meta, .activity-head { font-size: 12px; color: #667085; }
+.cdk-timeline__subject, .activity-title { font-weight: 600; }
+.cdk-timeline__text, .activity-body, .cdk-note__text { margin: 2px 0 0; }
+.cdk-table { width: 100%; border-collapse: collapse; }
+.cdk-table th, .cdk-table td { padding: 6px 8px; text-align: left; border-bottom: 1px solid #eef2f7; }

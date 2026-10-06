@@ -1,0 +1,57 @@
+body { margin: 0; font: 14px/1.5 'Segoe UI', system-ui, sans-serif; color: #263238; background: #eceff1; }
+.sg-login { display: grid; place-items: center; min-height: 100vh; }
+.sg-login-box { padding: 24px 32px; background: #fff; border-radius: 8px; }
+.sg-appbar { display: flex; gap: 24px; align-items: center; padding: 8px 20px; color: #fff; background: #37474f; }
+.sg-brand { font-weight: 600; }
+.sg-menu { display: flex; gap: 4px; }
+.sg-menu-item { padding: 6px 12px; cursor: pointer; border-radius: 4px; }
+.sg-menu-item:hover { background: #546e7a; }
+.sg-user { margin-left: auto; }
+main { max-width: 980px; margin: 16px auto; padding: 0 16px; }
+.sg-title { margin: 0 0 12px; font-size: 20px; }
+.sg-card { margin-bottom: 14px; padding: 14px 16px; background: #fff; border-radius: 6px; box-shadow: 0 1px 2px rgba(0,0,0,.08); }
+.sg-card h2 { margin: 0 0 8px; font-size: 15px; }
+.sg-muted { color: #78909c; }
+.sg-timezone form { display: flex; gap: 8px; align-items: center; }
+.sg-btn { padding: 6px 14px; color: #fff; background: #00897b; border: 0; border-radius: 4px; }
+.sg-btn-link, .sg-pager { margin-left: 8px; color: #00695c; }
+.sg-disabled { color: #b0bec5; }
+.sg-toolbar { margin-bottom: 8px; }
+.of-data-table { display: table; width: 100%; background: #fff; border-collapse: collapse; }
+.of-data-table-row { display: table-row; }
+.of-data-table-row.odd { background: #f5f7f8; }
+.of-data-table-header { font-weight: 600; background: #eceff1; }
+.field-value { display: table-cell; padding: 6px 8px; border-bottom: 1px solid #eceff1; vertical-align: top; }
+.sg-sub { font-size: 12px; color: #78909c; }
+.sg-recent { margin: 0; padding: 0; list-style: none; }
+.sg-recent-item { padding: 6px 0; cursor: pointer; border-bottom: 1px solid #eceff1; }
+.sg-record-head { display: flex; gap: 12px; align-items: baseline; margin-bottom: 10px; }
+.sg-loading { color: #78909c; }
+.sg-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 24px; }
+.of-field { padding: 4px 0; }
+.of-field-label { font-size: 12px; color: #78909c; }
+.of-field-content-text { white-space: pre-line; }
+.subpanel-outer { margin-bottom: 10px; background: #fff; border-radius: 6px; box-shadow: 0 1px 2px rgba(0,0,0,.08); }
+.subpanel-toggle { display: block; width: 100%; padding: 8px 12px; text-align: left; background: none; border: 0; cursor: pointer; }
+.subpanel-title-label { margin: 0; font-size: 14px; }
+.subpanel-body { padding: 0 12px 10px; }
+.sg-texts { display: flex; flex-direction: column; gap: 6px; max-width: 560px; }
+.sg-text { padding: 6px 10px; border-radius: 8px; background: #eceff1; }
+.sg-text--outbound { align-self: flex-end; background: #c8e6c9; }
+.sg-text-meta { font-size: 11px; color: #78909c; }
+.sg-email-body p { margin: 0 0 8px; }
+.sg-footer { padding: 16px; font-size: 12px; color: #78909c; text-align: center; }
+.sg-tabs { display: flex; gap: 4px; margin: 0 0 10px; border-bottom: 2px solid #b0bec5; }
+.sg-tab { padding: 6px 14px; color: #37474f; text-decoration: none; background: #eceff1; border-radius: 4px 4px 0 0; }
+.sg-tab--current { color: #fff; background: #37474f; }
+
+/* Users module */
+.sg-table { width: 100%; border-collapse: collapse; background: #fff; }
+.sg-table th, .sg-table td { padding: 6px 10px; border-bottom: 1px solid #e0e0e0; text-align: left; font-size: 13px; }
+.sg-table tr.odd td { background: #f7f9fa; }
+.sg-badge { padding: 1px 8px; border-radius: 10px; font-size: 12px; background: #c8e6c9; }
+.sg-badge--disabled { background: #ffcdd2; }
+.sg-user-card { border-collapse: collapse; }
+.sg-user-card td { padding: 5px 12px; border-bottom: 1px solid #eee; font-size: 13px; }
+.sg-user-label { color: #546e7a; width: 220px; }
+.sg-team-item { margin: 4px 0; }

@@ -1,0 +1,80 @@
+{
+  "_readme": "CRMs the mapping agent explores. These three point at the local mock CRMs (npm run mock-crms). For a real CRM add an entry: match.hosts = its domains (wildcards allowed, e.g. *.vinsolutions.com), startUrl = a page reachable after sign-in (a contact/lead list works best), login.steps = how to get signed in: {fill, env} types a credential from that environment variable, {click} presses a button, {goto} opens a page, {wait: ms} pauses; add optional: true to a step that may not be needed (e.g. a one-time 'confirm your time zone' screen). 'default' values are for the mocks only.",
+  "sites": [
+    {
+      "id": "vinsolutions",
+      "name": "VinSolutions (mock)",
+      "match": {
+        "hosts": [
+          "localhost:4101"
+        ]
+      },
+      "targets": ["customers"],
+      "startUrl": "http://localhost:4101/vinconnect/",
+      "login": null,
+      "crawl": {
+        "maxPages": 12,
+        "perPattern": 2
+      }
+    },
+    {
+      "id": "cdk",
+      "name": "CDK eLeads (mock)",
+      "match": {
+        "hosts": [
+          "localhost:4102"
+        ]
+      },
+      "targets": ["customers"],
+      "startUrl": "http://localhost:4102/elead/app.html#/customers",
+      "login": {
+        "url": "http://localhost:4102/login",
+        "steps": [
+          {
+            "fill": "#username",
+            "env": "MOCK_CDK_USER",
+            "default": "demo.sales"
+          },
+          {
+            "fill": "#password",
+            "env": "MOCK_CDK_PASSWORD",
+            "default": "mock-crm-2026"
+          },
+          {
+            "click": "button[type=submit]"
+          }
+        ],
+        "successUrlIncludes": "/elead/"
+      },
+      "crawl": {
+        "maxPages": 12,
+        "perPattern": 2
+      }
+    },
+    {
+      "id": "sugar",
+      "name": "SugarLike (mock)",
+      "match": {
+        "hosts": [
+          "localhost:4103"
+        ]
+      },
+      "targets": ["customers"],
+      "startUrl": "http://localhost:4103/app/",
+      "login": {
+        "url": "http://localhost:4103/app/",
+        "steps": [
+          {
+            "click": "button:has-text('Save')",
+            "optional": true
+          }
+        ],
+        "successUrlIncludes": "/app/"
+      },
+      "crawl": {
+        "maxPages": 16,
+        "perPattern": 2
+      }
+    }
+  ]
+}

@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Sunrise Toyota of Plano - Customer Dashboard</title>
+    <style>
+      body { font-family: sans-serif; margin: 0; }
+      header, nav, main, footer { padding: 8px 16px; }
+      .row { display: flex; gap: 8px; }
+      .label { font-weight: bold; }
+      .hidden-tab { display: none; }
+      td, th { padding: 2px 8px; border: 1px solid #ccc; }
+    </style>
+  </head>
+  <body>
+    <!-- Synthetic test data only. Mimics a typical dealer CRM customer view. -->
+    <header>
+      <strong>Sunrise Toyota of Plano</strong>
+      <span>Sales: <a href="tel:9725550100">(972) 555-0100</a></span>
+      <span><a href="mailto:sales@sunrisetoyota.example">sales@sunrisetoyota.example</a></span>
+    </header>
+    <nav>Dashboard | Leads | Inventory | Reports</nav>
+    <main>
+      <h2>DOE, JOHN</h2>
+      <table>
+        <tr><th>Cell</th><td><a href="tel:+12145550147">(214) 555-0147</a></td></tr>
+        <tr><th>Home</th><td>972.555.0199</td></tr>
+        <tr><th>Email</th><td><a href="mailto:john.doe@example.com">john.doe@example.com</a></td></tr>
+        <tr><th>Address</th><td>123 Main Street<br />Plano, TX 75024</td></tr>
+      </table>
+
+      <section>
+        <h3>Vehicle of interest</h3>
+        <div class="row"><span class="label">Vehicle:</span><span>2024 Toyota Camry XSE</span></div>
+        <div class="row"><span class="label">VIN:</span><span>1HGCM82633A004352</span></div>
+        <div class="row"><span class="label">Stock #:</span><span>T24518</span></div>
+        <div class="row"><span class="label">Trade-in:</span><span>2018 Honda Civic EX, 64,000 mi</span></div>
+      </section>
+
+      <form>
+        <label for="source">Lead Source</label>
+        <select id="source"><option value="">Select…</option><option value="cars" selected>Cars.com</option></select>
+        <label for="sp">Salesperson</label>
+        <input id="sp" value="Mike Ross" />
+        <input aria-label="Lead Status" value="Active - Working" />
+        <input type="hidden" name="internal_id" value="HIDDEN-ID-42" />
+        <input type="password" value="hunter2" />
+        <label for="ssn">SSN</label>
+        <input id="ssn" name="ssn" value="123456789" />
+      </form>
+
+      <section>
+        <h3>Credit application</h3>
+        <p>Applicant SSN: 123-45-6789 · Card on file: 4111 1111 1111 1111</p>
+      </section>
+
+      <div class="hidden-tab">DECOY Jane Hidden (999) 999-9999 decoy@example.com</div>
+
+      <customer-comments><span slot="body">Looking for a hybrid, prefers email contact.</span></customer-comments>
+    </main>
+    <footer>Sunrise Toyota of Plano · 500 Dealer Pkwy, Plano, TX 75093</footer>
+
+    <script>
+      customElements.define(
+        'customer-comments',
+        class extends HTMLElement {
+          constructor() {
+            super();
+            this.attachShadow({ mode: 'open' }).innerHTML = '<h3>Customer comments</h3><p><slot name="body"></slot></p>';
+          }
+        },
+      );
+    </script>
+  </body>
+</html>

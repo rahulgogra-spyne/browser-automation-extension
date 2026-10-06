@@ -1,0 +1,158 @@
+body {
+  width: auto;
+  font-size: 14px;
+}
+
+.console {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 20px 20px 40px;
+}
+
+.console-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+  margin-bottom: 16px;
+}
+
+.console-head h1 {
+  margin: 0 0 4px;
+  font-size: 22px;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.card {
+  margin-bottom: 16px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.card h2 {
+  margin: 0 0 10px;
+  font-size: 15px;
+}
+
+.now-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.now-head h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.phase {
+  margin: 8px 0 4px;
+  min-height: 1.4em;
+}
+
+.counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+  margin: 6px 0 10px;
+  color: var(--muted);
+}
+
+.counts b {
+  color: var(--text);
+}
+
+.columns {
+  display: grid;
+  grid-template-columns: 1.3fr 1fr;
+  gap: 16px;
+}
+
+@media (max-width: 800px) {
+  .columns {
+    grid-template-columns: 1fr;
+  }
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+th,
+td {
+  padding: 5px 6px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+}
+
+th {
+  font-size: 11px;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+td a {
+  color: var(--accent);
+}
+
+.row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.row input[type='url'] {
+  flex: 1;
+  min-width: 260px;
+}
+
+select {
+  padding: 6px 8px;
+  font: inherit;
+  color: inherit;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.log-title {
+  margin-top: 16px;
+}
+
+.console-log {
+  max-height: 320px;
+  margin: 0;
+}
+
+.map-stages[hidden] {
+  display: none;
+}
+
+.console {
+  max-height: none;
+  overflow: visible;
+}
+
+.site-card {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+}
+
+.site-card h2 {
+  margin: 0 0 2px;
+}
+
+.site-card p {
+  margin: 0;
+}
