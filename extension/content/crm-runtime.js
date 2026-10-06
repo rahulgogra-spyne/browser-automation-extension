@@ -15,7 +15,7 @@
 // A selector reaches into a web component's shadow root with " >>> ":
 //   "records-record-layout >>> div.slds-form-element > span"
 (() => {
-  const RUNTIME_VERSION = 16;
+  const RUNTIME_VERSION = 18;
   if (window.__crmRuntime?.version >= RUNTIME_VERSION) return;
 
   const STABLE_ATTRS = ['data-testid', 'data-test', 'data-qa', 'data-field', 'data-key', 'data-name', 'data-label', 'name', 'aria-label'];
@@ -1576,6 +1576,25 @@
     }
     return true;
   }
+  // Switches store the way the application itself does when its drop-down
+  // changes: by loading an address (in one of its frames, or in this page).
+  // storage: what the application notes in localStorage before it does.
+  function goToStore({ frame = '', url, storage = {} }) {
+    for (const [key, value] of Object.entries(storage)) {
+      try {
+        localStorage.setItem(key, String(value));
+      } catch {
+        // storage is off: the switch goes on
+      }
+    }
+    const address = absoluteUrl(url);
+    const target = frame ? queryOne(document, frame) : null;
+    if (frame && !target) return false;
+    if (target) target.src = address;
+    else location.href = address;
+    return true;
+  }
+
   // Whether a store's entry is on screen (the menu is open).
   const storeEntryShown = (entry) => Boolean(entry?.nav && findNav(entry.nav));
   // What the switcher shows now (the store the page is on).
@@ -1593,7 +1612,10 @@
     for (const c of clickables({ max: 300 })) {
       const el = findEverywhere(document, `[data-cn="${c.id}"]`)[0];
       if (!el || !freshSet.has(el) || PLACEHOLDER_OPTION.test(c.text) || c.role === 'tab') continue;
-      out.push({ text: c.text, raw: clean(el.innerText || el.textContent || c.text), nav: describeNav(c.id) });
+      // The entry itself (a button, an option, a list item around the caption) is what takes the click.
+      const entry = deepClosest(el, 'button, [role="option"], [role="menuitem"], [role="menuitemradio"], li');
+      const target = entry && freshSet.has(entry) && navText(entry) === c.text ? entry : el;
+      out.push({ text: c.text, raw: clean(target.innerText || target.textContent || c.text), nav: describeNavEl(target) });
     }
     if (out.length) return out;
     // Nothing "clickable" appeared: the entries of a list still look alike. Of what
@@ -2081,6 +2103,44 @@
     }
   }
 
+  // A details panel laid out as a table: a cell that is a label (its text
+  // ends with a colon, or it holds the panel's "edit this" link) and the
+  // cell after it, its value. [{ label, value }] for every such pair under
+  // the roots; a ticked box reads Yes/No. Rows the layout names one by one
+  // are read by its rules; this finds the rest (a field only some records have).
+  function readLabelCells(roots = [], linkSelector = 'a[class*="edit" i]') {
+    const out = [];
+    const seen = new Set();
+    for (const sel of roots) {
+      let tops = [];
+      try {
+        tops = findAll(sel);
+      } catch {
+        tops = [];
+      }
+      for (const top of tops) {
+        for (const cell of findEverywhere(top, 'td, th')) {
+          if (!isVisible(cell) || cell.querySelector('table')) continue;
+          const text = clean(cell.innerText || cell.textContent || '');
+          if (!text || text.length > 45) continue;
+          if (!/^:|:$/.test(text) && !cell.querySelector(linkSelector)) continue;
+          const label = text.replace(/^[:\s]+|[:\s]+$/g, '');
+          const valueCell = cell.nextElementSibling;
+          if (!label || !valueCell || !valueCell.matches('td, th') || !isVisible(valueCell) || SENSITIVE_LABEL.test(label)) continue;
+          const box = valueCell.querySelector('input[type="checkbox"], input[type="radio"]');
+          let value = clean(valueCell.innerText || valueCell.textContent || '');
+          if (!value && box) value = box.checked ? 'Yes' : 'No';
+          if (!value || (value.length <= 45 && /:$/.test(value))) continue; // nothing there, or another label
+          const id = `${label}\n${value}`;
+          if (seen.has(id)) continue;
+          seen.add(id);
+          out.push({ label, value: redact(value).slice(0, 600) });
+        }
+      }
+    }
+    return out;
+  }
+
   // { url, title, text, tables, fields, links } of this frame, or of the
   // panel a selector names (root).
   function scrapePage({ root = '' } = {}) {
@@ -2142,6 +2202,8 @@
     }
     // Leave the user on the tab the record opened with.
     if (views.length > 1 && views[0].activate && views[0].activate.kind !== 'link') activate(views[0].activate, within());
+    // Label/value pairs the rules did not name (pageType.labelCells: { roots, link }).
+    if (pageType.labelCells?.roots?.length) result.labelled = readLabelCells(pageType.labelCells.roots, pageType.labelCells.link || undefined);
     return result;
   }
 
@@ -2193,6 +2255,7 @@
     describeStores,
     openStoreMenu,
     nudgeStoreMenu,
+    goToStore,
     dropdownReport,
     storeEntryShown,
     storeCaption,

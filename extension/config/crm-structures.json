@@ -2076,7 +2076,7 @@
         "tasks",
         "vehicles"
       ],
-      "version": 8,
+      "version": 10,
       "mappedAt": "2026-10-05T14:01:30.509Z",
       "mappedBy": "extension (server)",
       "pageTypes": [
@@ -2085,9 +2085,201 @@
           "role": "record",
           "entity": "customer",
           "dataset": "customers",
-          "read": "everything",
           "urlRegex": "/[Nn]ew[Pp]rospects/OpptyDetails\\.aspx\\?(?:[^#]*&)?lPID=(\\d+)",
-          "note": "A prospect row names its page in the script of its name link: NewWindow(\"../newprospects/OpptyDetails.aspx?lDID=<deal>&lPID=<person>&Loc=…\"). The page is opened by that address in a second work tab (not by clicking, which opens a pop-up window) and read whole: every label and value, every table as a list. Its structure is saved once per run (inspect_record_customer_…json) to write a precise layout from."
+          "note": "OpptyDetails.aspx, written from an inspection. Customer details: rows of a label link (CustomerInfoPanel_<Field>Link) and the cell after it; the opportunity beside them (OpportunityPanel_…). Its Contacts tab is a frame with no address of its own (#tabsTargetFrame, history.aspx): scheduled activities (#gvScheduled) and completed ones (#gvOpptyHistory; real rows are tr.even / tr.odd). Never pressed on this page: the label links (they open editors), the tick boxes, the action icons.",
+          "views": [
+            {
+              "name": "Details",
+              "waitFor": "#tabsTargetFrame >>> #HistoryTable",
+              "fields": {
+                "full_name": [
+                  {
+                    "css": "td:has(#CustomerInfoPanel_NameLink) + td"
+                  }
+                ],
+                "person_id": [
+                  {
+                    "css": "#CustomerInfoPanel_lblPersonID"
+                  }
+                ],
+                "address": [
+                  {
+                    "css": "td:has(#CustomerInfoPanel_AddressLink) + td"
+                  }
+                ],
+                "city": [
+                  {
+                    "css": "#CustomerInfoPanel_CityStateZipRow td.headingBlack_11px",
+                    "regex": "^\\s*([^,]+),"
+                  }
+                ],
+                "state": [
+                  {
+                    "css": "#CustomerInfoPanel_CityStateZipRow td.headingBlack_11px",
+                    "regex": ",\\s*([A-Za-z]{2})\\b"
+                  }
+                ],
+                "zip": [
+                  {
+                    "css": "#CustomerInfoPanel_CityStateZipRow td.headingBlack_11px",
+                    "regex": "(\\d{5}(?:-\\d{4})?)\\s*$"
+                  }
+                ],
+                "phone_home": [
+                  {
+                    "css": "td:has(#CustomerInfoPanel_HPhoneLink) + td td"
+                  },
+                  {
+                    "css": "td:has(#CustomerInfoPanel_HPhoneLink) + td"
+                  }
+                ],
+                "phone_mobile": [
+                  {
+                    "css": "td:has(#CustomerInfoPanel_CPhoneLink) + td td"
+                  },
+                  {
+                    "css": "td:has(#CustomerInfoPanel_CPhoneLink) + td"
+                  }
+                ],
+                "phone_work": [
+                  {
+                    "css": "td:has(#CustomerInfoPanel_WPhoneLink) + td td"
+                  },
+                  {
+                    "css": "td:has(#CustomerInfoPanel_WPhoneLink) + td"
+                  }
+                ],
+                "email": [
+                  {
+                    "css": "td:has(#CustomerInfoPanel_EmailLink) + td"
+                  }
+                ],
+                "birthday": [
+                  {
+                    "css": "td:has(#CustomerInfoPanel_BdayLink) + td"
+                  }
+                ],
+                "preferred_language": [
+                  {
+                    "css": "td:has(#CustomerInfoPanel_PrefLanguageLink) + td"
+                  }
+                ],
+                "text_consent": [
+                  {
+                    "css": "#CustomerInfoPanel_PhoneTextImage",
+                    "attr": "alt"
+                  }
+                ],
+                "vin": [
+                  {
+                    "css": "td:has(#OpportunityPanel_VehicleLink) + td",
+                    "regex": "\\b([A-HJ-NPR-Z0-9]{17})\\b"
+                  }
+                ],
+                "vehicle": [
+                  {
+                    "css": "td:has(#OpportunityPanel_VehicleLink) + td span.truncateText"
+                  },
+                  {
+                    "css": "td:has(#OpportunityPanel_VehicleLink) + td"
+                  }
+                ],
+                "stock_number": [
+                  {
+                    "css": "#stockText"
+                  }
+                ],
+                "trade_in": [
+                  {
+                    "css": "td:has(#OpportunityPanel_TradeInLink) + td"
+                  }
+                ],
+                "activity_summary": [
+                  {
+                    "css": "#tabsTargetFrame >>> #liSummary"
+                  }
+                ]
+              },
+              "collections": {
+                "completed_activities": {
+                  "container": "#tabsTargetFrame >>> #gvOpptyHistory",
+                  "item": "tr.even, tr.odd",
+                  "fields": {
+                    "timestamp": [
+                      {
+                        "css": ":scope > td:nth-child(2)"
+                      }
+                    ],
+                    "channel": [
+                      {
+                        "css": ":scope > td:nth-child(3)"
+                      }
+                    ],
+                    "subject": [
+                      {
+                        "css": ":scope > td:nth-child(3)"
+                      }
+                    ],
+                    "outcome": [
+                      {
+                        "css": ":scope > td:nth-child(4)"
+                      }
+                    ],
+                    "body": [
+                      {
+                        "css": ":scope > td.TaskComments"
+                      }
+                    ],
+                    "sender": [
+                      {
+                        "css": ":scope > td.completedBy"
+                      }
+                    ]
+                  }
+                },
+                "scheduled_activities": {
+                  "container": "#tabsTargetFrame >>> #gvScheduled",
+                  "item": ":scope > tbody > tr.even, :scope > tbody > tr.odd",
+                  "fields": {
+                    "timestamp": [
+                      {
+                        "css": ":scope > td:nth-child(1)"
+                      }
+                    ],
+                    "channel": [
+                      {
+                        "css": ":scope > td:nth-child(2)"
+                      }
+                    ],
+                    "subject": [
+                      {
+                        "css": ":scope > td:nth-child(2)"
+                      }
+                    ],
+                    "recipient": [
+                      {
+                        "css": ":scope > td:nth-child(3)"
+                      }
+                    ],
+                    "body": [
+                      {
+                        "css": ":scope > td.TaskComments"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "labelCells": {
+            "roots": [
+              "#pnlCustomerInformation",
+              "#OpportunityPanel_ActiveOpptyPanel"
+            ],
+            "link": "a.editCust, a.editOppty"
+          },
+          "required": [],
+          "expectOneOf": []
         },
         {
           "id": "prospects_active",
@@ -2287,7 +2479,7 @@
             {
               "label": "Inventory",
               "nav": {
-                "css": "span.icon-book.icon-book-black",
+                "css": "span[id^=\"MenuSections_SectionLabel_\"]",
                 "kind": "nav",
                 "text": "Inventory"
               }
@@ -2315,6 +2507,16 @@
         }
       ],
       "history": [
+        {
+          "version": 10,
+          "mappedAt": "2026-10-06T13:28:02.514Z",
+          "reason": "the customer page (OpptyDetails.aspx) by rules written from its inspection: details, opportunity, scheduled and completed activities"
+        },
+        {
+          "version": 9,
+          "mappedAt": "2026-10-06T13:24:49.157Z",
+          "reason": "dealers switched the CRM’s own way (admin/SwitchCompany1.asp?ID=<id> in iframe#Main); no direct address; Inventory by its label"
+        },
         {
           "version": 8,
           "mappedAt": "2026-10-06T11:17:09.165Z",
@@ -2382,11 +2584,17 @@
       "stores": {
         "menu": {
           "control": {
-            "css": "#ddlCompany input[data-testid=\"autocomplete-menu-input-field\"]"
+            "css": "#ddlCompany input[name=\"typeahead-dropdown\"]"
+          }
+        },
+        "switch": {
+          "frame": "iframe#Main",
+          "url": "admin/SwitchCompany1.asp?ID={code}",
+          "localStorage": {
+            "isSwitching": "true"
           }
         }
-      },
-      "directUrl": "https://crm.connectcdk.com/evo2/fresh/elead-v45/elead_track/index.aspx"
+      }
     }
   }
 }

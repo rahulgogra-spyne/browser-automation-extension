@@ -437,6 +437,11 @@ async function captureItems(run, ctx, items) {
         }
         return read;
       });
+      // Label/value pairs the page's rules did not name become columns of their own.
+      for (const { label, value } of result?.labelled ?? []) {
+        const key = labelKey(label);
+        if (key && !(key in result.fields)) result.fields[key] = value;
+      }
       // What the list showed for this record is kept; what its page shows wins.
       if (result && item.fields) result.fields = { ...item.fields, ...result.fields };
       const verdict = assessExtraction(recordType, result);
@@ -958,7 +963,7 @@ async function findStores(tabId, ctx, note = () => {}) {
       return now ? { none: true, markup: [], current: now } : null;
     }
     const current = await inFrameOf(tabId, frameId)((c) => window.__crmRuntime?.storeCaption?.(c) ?? null, [control]);
-    return { spec: { kind: 'menu', control, caption: current || 'store' }, frameId, entries: only(items.map((i) => ({ text: i.raw || i.text, nav: i.nav }))), current };
+    return { spec: { kind: 'menu', control, caption: current || 'store' }, frameId, entries: only(items.map((i) => ({ text: i.raw || i.text, nav: i.nav }))), current, switch: config.switch ?? null };
   }
   // 2. A native <select> of stores.
   const selects = (await inFrames(tabId, () => window.__crmRuntime?.describeStores?.() ?? null)).filter((f) => f.result);
@@ -985,10 +990,57 @@ async function findStores(tabId, ctx, note = () => {}) {
   return null;
 }
 
+// What the store switcher shows now, wherever its frame is (a switch may
+// reload the application): { caption, frameId } or null.
+async function storeShown(tabId, stores) {
+  const read = stores.spec.kind === 'menu' ? (control) => window.__crmRuntime?.storeCaption?.(control) ?? null : (spec) => window.__crmRuntime?.currentStore?.(spec) ?? null;
+  const hit = (await inFrames(tabId, read, [stores.spec.kind === 'menu' ? stores.spec.control : stores.spec], { timeoutMs: 20_000 })).find((f) => f.result);
+  return hit ? { caption: hit.result, frameId: hit.frameId } : null;
+}
+const sameStore = (caption, entry) => {
+  const norm = (t) => String(t ?? '').toLowerCase().replace(/\s+/g, ' ').trim();
+  const code = (entry.text.match(/\((\s*\d+\s*)\)\s*$/) || [])[1]?.trim();
+  return Boolean(caption) && (norm(caption) === norm(entry.text) || (code ? new RegExp(`\\(\\s*${code}\\s*\\)`).test(caption) : norm(caption).includes(norm(entry.text))));
+};
+
 // Switches the tab to one store and says what the switcher shows afterwards
-// (null when the switch could not be made).
+// (null when the switch could not be made). stores.switch (from the layout):
+// the application's own way, an address with the store's code loaded in a
+// frame: { frame, url: "…?ID={code}", localStorage }; {code} is the number
+// in brackets at the end of the entry ("Inver Grove Hyundai (8497)").
 async function switchStore(tabId, stores, entry) {
-  const inFrame = inFrameOf(tabId, stores.frameId);
+  const settle = async () => {
+    await followScriptLinks(tabId);
+    await new Promise((r) => setTimeout(r, 600));
+    if ((await chrome.tabs.get(tabId).catch(() => null))?.status === 'loading') await waitForTabLoad(tabId).catch(() => {});
+    await settleTab(tabId);
+  };
+  // The switcher saying the store's name is what counts: looked for a while, the application reloading meanwhile.
+  const confirmed = async (ms) => {
+    for (const until = Date.now() + ms; ; ) {
+      const now = await storeShown(tabId, stores);
+      if (now) stores.frameId = now.frameId;
+      if (now && sameStore(now.caption, entry)) return now.caption;
+      if (Date.now() >= until || cancelRequested) return null;
+      await new Promise((r) => setTimeout(r, 1500));
+    }
+  };
+  const already = await storeShown(tabId, stores);
+  if (already) stores.frameId = already.frameId;
+  if (already && sameStore(already.caption, entry)) return already.caption;
+
+  const code = (entry.text.match(/\(\s*(\d+)\s*\)\s*$/) || [])[1] ?? '';
+  if (stores.switch?.url && (code || !stores.switch.url.includes('{code}'))) {
+    const url = stores.switch.url.replace('{code}', code).replace('{name}', encodeURIComponent(entry.text));
+    const done = await inFrameOf(tabId, stores.frameId)((how) => window.__crmRuntime?.goToStore?.(how) ?? false, [{ frame: stores.switch.frame ?? '', url, storage: stores.switch.localStorage ?? {} }]);
+    if (done) {
+      await settle();
+      const now = await confirmed(30_000);
+      if (now) return now;
+    }
+  }
+  // By hand: open the list, press the entry.
+  const inFrame = (func, args) => inFrameOf(tabId, stores.frameId)(func, args);
   if (stores.spec.kind === 'menu') {
     const shown = () => inFrame((e) => window.__crmRuntime?.storeEntryShown?.(e) ?? false, [entry]);
     for (let attempt = 0; attempt < 2 && !(await shown()); attempt++) {
@@ -1002,14 +1054,11 @@ async function switchStore(tabId, stores, entry) {
     }
     if (!(await shown())) return null;
   }
+  if (!entry.nav && stores.spec.kind === 'menu') return null;
   const done = await inFrame((spec, e) => window.__crmRuntime?.selectStore?.(spec, e) ?? false, [stores.spec, { ...entry, force: true }]);
   if (!done) return null;
-  await followScriptLinks(tabId);
-  await new Promise((r) => setTimeout(r, 400));
-  if ((await chrome.tabs.get(tabId).catch(() => null))?.status === 'loading') await waitForTabLoad(tabId).catch(() => {});
-  await settleTab(tabId);
-  const now = stores.spec.kind === 'menu' ? await inFrame((control) => window.__crmRuntime?.storeCaption?.(control) ?? null, [stores.spec.control]) : await inFrame((spec) => window.__crmRuntime?.currentStore?.(spec) ?? null, [stores.spec]);
-  return now ?? entry.text;
+  await settle();
+  return confirmed(20_000);
 }
 
 // Reaches a screen in a tab (its path, then its load steps); the caption of
@@ -1131,6 +1180,18 @@ async function captureScreens(run, ctx, screens) {
               run.data(await describeTab(tab.id));
               continue;
             }
+            // The store the list is read for is the one the switcher shows: checked, not assumed.
+            if (entry && stores) {
+              const shows = (await storeShown(tab.id, stores))?.caption;
+              if (shows && !sameStore(shows, entry)) {
+                note(`"${screen.entity}": the drop-down shows "${shows}", not ${entry.text}: switching again`);
+                if (!(await switchStore(tab.id, stores, entry)) || (await reachScreen(tab.id, screen, note))) {
+                  stats.failed++;
+                  note(`"${screen.entity}": could not be read for ${entry.text}; skipped`);
+                  continue;
+                }
+              }
+            }
             await walkScreen(run, ctx, screen, tab.id, queue, { kind, store });
             // Once more with wider filters: what the first pass gave is kept whatever this one gives.
             if (screen.alsoLoad?.length && !cancelRequested) {
@@ -1158,10 +1219,18 @@ async function captureScreens(run, ctx, screens) {
           if (cancelRequested) break;
           stats.phase = `Switching to ${entry.text}`;
           await run.publish();
-          const now = await switchStore(tab.id, stores, entry);
+          let now = await switchStore(tab.id, stores, entry);
+          if (!now && !cancelRequested) {
+            // The application may be somewhere the switcher is not: start it again, once.
+            note(`Switching to ${entry.text} did not take: loading the CRM again and trying once more`);
+            await navigateTab(tab.id, home);
+            await settleTab(tab.id);
+            if (!(await reachScreen(tab.id, entered, note))) now = await switchStore(tab.id, stores, entry);
+          }
           if (!now) {
             stats.failed++;
-            note(`Could not switch to ${entry.text}; skipped`);
+            const shows = (await storeShown(tab.id, stores))?.caption;
+            note(`Could not switch to ${entry.text}${shows ? ` (the drop-down shows "${shows}")` : ''}; skipped, so that nothing is filed under the wrong store`);
             continue;
           }
           note(`— ${entry.text} — (the drop-down now shows "${now}")`);
@@ -1380,7 +1449,8 @@ async function captureHere({ tabId, dataset = null }) {
 // and card numbers are skipped or blanked by the page reader.
 const LABEL_KEYS = [
   [/^(first|first name|given name)$/i, 'first_name'], [/^(last|last name|surname|family name)$/i, 'last_name'], [/^(name|full name|customer|customer name|buyer)$/i, 'full_name'],
-  [/^(e-?mail|e-?mail address|primary e-?mail)$/i, 'email'], [/^(cell|cell phone|mobile|mobile phone|cellular)$/i, 'phone_mobile'], [/^(home|home phone|day phone|evening phone)$/i, 'phone_home'], [/^(work|work phone|business phone|office phone)$/i, 'phone_work'], [/^(phone|phone number|telephone|primary phone)$/i, 'phone'],
+  [/^(e-?mail|e-?mail address|primary e-?mail)$/i, 'email'], [/^(cell|cell ?#|cell phone|mobile|mobile ?#|mobile phone|cellular)$/i, 'phone_mobile'], [/^(home|home ?#|home phone|day phone|evening phone)$/i, 'phone_home'], [/^(work|work ?#|work phone|business phone|office phone)$/i, 'phone_work'], [/^(phone|phone ?#|phone number|telephone|primary phone)$/i, 'phone'],
+  [/^(birthday|birth ?date|date of birth|dob)$/i, 'birthday'], [/^(trade|trade-?in|trade in)$/i, 'trade_in'], [/^(vehicle|vehicle sought|vehicle of interest)$/i, 'vehicle'],
   [/^(address|street|street address|address 1|address line 1)$/i, 'address'], [/^city$/i, 'city'], [/^(state|province|st)$/i, 'state'], [/^(zip|zip code|postal code|postcode)$/i, 'zip'], [/^country$/i, 'country'],
   [/^(company|company name|business name|employer)$/i, 'company'], [/^(salesperson|sales person|sales rep|sales associate|assigned to|owner)$/i, 'salesperson'],
   [/^(source|lead source|up source)$/i, 'lead_source'], [/^(status|lead status|stage|sub status)$/i, 'lead_status'],
