@@ -51,15 +51,27 @@ Many CRM list screens (CDK Unify's Prospect Search, for one) are empty until a s
 - **Capture whole CRM** does it by itself where it can: after replaying the screen's menu clicks it runs the screen's `load` steps (if the layout has any), and when the grid still shows no rows it presses the **Search / Find / Go / Show / Apply / Load** button on screen (never a Create / Edit / Delete), waits, then **learns the grid on screen** from its column headers (no AI) and reads it page after page. The learned grid is remembered for the next run. The log says what happened: `pressed "Search" to load the data`, `learned the grid on screen: 10 rows, columns full_name, email, …`.
 - **Capture this tab** is for everything else: open the list yourself in the CRM (menus, filters, Search), then press **Capture this tab** in the capture window. The top card tells you what it sees (`a grid with 25 rows (looks like customers: Name, Email, Cell…)`, or `no data grid yet, but a "Search" button`). It learns the grid, reads it in that tab page after page (don't use the tab meanwhile), and saves. Pick the kind of data in the drop-down next to the button, or leave it on auto-detect. Rows that link into a record page the layout knows are read from their pages, with fields and message history.
 
+### Several dealerships / stores / accounts in one CRM
+
+A CRM login often covers several dealerships, rooftops or accounts whose data is separate, switched with a drop-down in the header (or a "Dealer"/"Store" filter beside the search). On every screen, and on **Capture this tab**, the extension looks for such a switcher: a `<select>` or menu whose caption says dealer / dealership / store / rooftop / location / branch / account / company…, or whose entries read like dealership names. When it finds one it logs `Found 3 stores/dealers ("Dealership"): Sunrise Toyota · Lakeside Honda · Metro Ford` and reads the screen **once per store**: switch, get back to the screen, run its search again, read every page. Each store's rows go to **their own files** (`leads_customers_sunrise-toyota_<date>.csv`, `leads_messages_sunrise-toyota_<date>.csv`…) and carry the store in a `store` column; duplicates are judged within a store.
+
+To steer it, a CRM entry in the layout can set `"stores"`:
+
+- `false`: never switch stores;
+- `{ "select": { "css": "#dealerSelect" } }` or `{ "menu": { "control": { "css": "button.store-switcher", "text": "Sunrise Toyota" } } }`: use this switcher;
+- `{ "only": ["Sunrise Toyota", "Metro Ford"] }`: capture these stores only.
+
 ## Files
 
 Written to `Downloads/<folder>/` (default `SpyneLeads`), rewritten on every save:
 
 | File | One row per | Key columns |
 |---|---|---|
-| `leads_<kind>_<date>.csv` (`customers`, `users`, `deals`…) | record | `site, crm_record_id`, every field read, `messages_count, page_url, record_id` |
-| `leads_messages_<date>.csv` | text / email / call / note | `customer, customer_record_id` (→ `record_id` above), `channel, timestamp, direction, sender, recipient, subject, body, duration, outcome, message_id` |
-| `leads_reference_<date>.csv` | distinct value | every lead source, status, salesperson… seen, with counts |
+| `leads_<kind>[_<store>]_<date>.csv` (`customers`, `users`, `deals`…) | record | `site, store, crm_record_id`, every field read, `messages_count, page_url, record_id` |
+| `leads_messages[_<store>]_<date>.csv` | text / email / call / note | `store, customer, customer_record_id` (→ `record_id` above), `channel, timestamp, direction, sender, recipient, subject, body, duration, outcome, message_id` |
+| `leads_reference[_<store>]_<date>.csv` | distinct value | every lead source, status, salesperson… seen, with counts |
+
+`_<store>` is present when the rows came from one store of a multi-store CRM.
 
 Re-running the same day updates existing rows (same `crm_record_id`) instead of duplicating them; messages already saved (same `message_id`) are skipped. Everything is stored in the extension first, so a failed file write loses nothing: **Write CSV again** in the capture window, or **Settings → Saved days**.
 
@@ -85,8 +97,15 @@ Rules are CSS selectors (with ` >>> ` to step into shadow roots and address-less
 
 To add or change a CRM, edit the file and reload the extension (`chrome://extensions` → ↻). The bundled file was produced by the mapping agent of the earlier version of this project, which is kept in git history (commit "Snapshot before stripping down").
 
+## CDK Unify (`app-unify.app.connectcdk.com`)
+
+The bundled entry matches `app-unify.app.connectcdk.com` and `crm.connectcdk.com`. Its screens start from the launcher (`/applications`), press the **CRM** card (which opens the CRM in a new tab; the capture follows it in its work tab), then the menu entries: **Vehicle Search** (inventory grid, read as is) and **Prospects → Active** / **Prospects** (empty until **Search** is pressed: the capture presses it, learns the results grid from its headers, and reads it page after page). If the account has several dealerships, the dealership switcher in the CRM's header is used and each dealership is captured to its own files.
+
+If a screen does not come out right, open it yourself in the CRM with the filters you want and use **Capture this tab**; the log says what was found (`Found N stores…`, `pressed "Search"…`, `learned the grid…`), and the `path` / `load` / `stores` settings of the entry can be tuned from that.
+
 ## Limits
 
 - Caps per run: 200 pages per list, 5,000 records, 15 message pages per record; the log keeps the last 4,000 lines (the CSV holds everything).
+- Store switching is done on screens (click-driven lists) and on Capture this tab; URL-based lists of a multi-store CRM are read for the store the browser is on.
 - A list that only loads more rows when actually seen on screen, or a virtualised grid that recycles rows, is read as far as it shows.
 - A CRM whose first-run screen (time-zone confirmation, announcements) hides its lists must be past that screen in your browser before capturing.

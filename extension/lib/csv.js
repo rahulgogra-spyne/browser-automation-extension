@@ -16,10 +16,11 @@ export function escapeCell(value) {
   return s;
 }
 
-// One file per kind of data and day, relative to Downloads:
+// One file per kind of data, store and day, relative to Downloads:
 // "SpyneLeads/leads_customers_2026-09-29.csv", "…/leads_users_…",
+// "…/leads_customers_sunrise-toyota_2026-09-29.csv" (a store's rows),
 // "…/leads_messages_…", "…/leads_reference_…".
-export function csvFileName({ downloadFolder = '', filePrefix = '' }, date, kind = '') {
+export function csvFileName({ downloadFolder = '', filePrefix = '' }, date, kind = '', store = '') {
   const safe = (s) => String(s).replace(/[<>:"\\|?*\x00-\x1f]/g, '').trim();
   const folder = String(downloadFolder)
     .split(/[\\/]+/)
@@ -27,6 +28,7 @@ export function csvFileName({ downloadFolder = '', filePrefix = '' }, date, kind
     .filter((seg) => seg && seg !== '.' && seg !== '..')
     .join('/');
   const prefix = safe(filePrefix).replace(/\//g, '') || 'leads';
-  const name = `${prefix}${kind ? `_${kind}` : ''}_${date}.csv`;
+  const slug = safe(store).replace(/[^a-z0-9-]/gi, '-').replace(/^-+|-+$/g, '');
+  const name = `${prefix}${kind ? `_${kind}` : ''}${slug ? `_${slug}` : ''}_${date}.csv`;
   return folder ? `${folder}/${name}` : name;
 }

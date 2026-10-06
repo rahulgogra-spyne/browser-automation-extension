@@ -2,7 +2,7 @@
 // rows contain: leading metadata, then standard keys (in STANDARD_KEYS order)
 // when present, then every other key in the order it first appeared, then
 // trailing metadata.
-export const META_START = ['captured_at', 'site', 'page_title', 'crm_record_id'];
+export const META_START = ['captured_at', 'site', 'store', 'page_title', 'crm_record_id'];
 export const META_END = ['messages_count', 'page_url', 'captured_by', 'unverified_fields', 'record_id'];
 export const META_KEYS = new Set([...META_START, ...META_END]);
 

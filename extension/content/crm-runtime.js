@@ -15,7 +15,7 @@
 // A selector reaches into a web component's shadow root with " >>> ":
 //   "records-record-layout >>> div.slds-form-element > span"
 (() => {
-  const RUNTIME_VERSION = 4;
+  const RUNTIME_VERSION = 5;
   if (window.__crmRuntime?.version >= RUNTIME_VERSION) return;
 
   const STABLE_ATTRS = ['data-testid', 'data-test', 'data-qa', 'data-field', 'data-key', 'data-name', 'data-label', 'name', 'aria-label'];
@@ -1049,13 +1049,20 @@
       if (!groups.has(parent)) groups.set(parent, []);
       groups.get(parent).push(row);
     }
-    let best = null;
-    for (const [parent, rows] of groups) {
-      const cells = directCells(rows[0]).length;
-      const score = rows.length * cells;
-      if (!best || score > best.score) best = { parent, rows, cells, score };
+    // Biggest group first; a calendar (a date picker's weekday grid) is skipped.
+    const CALENDAR = '[class*="datepicker" i], [class*="calendar" i], [aria-label*="calendar" i]';
+    const ranked = [...groups]
+      .map(([parent, rows]) => ({ parent, rows, cells: directCells(rows[0]).length, score: rows.length * directCells(rows[0]).length }))
+      .filter((g) => !deepClosest(g.rows[0], CALENDAR))
+      .sort((a, b) => b.score - a.score);
+    for (const best of ranked) {
+      const described = describeGroup(best);
+      if (described && isDataGrid(described.spec)) return described;
     }
-    if (!best) return null;
+    return null;
+  }
+
+  function describeGroup(best) {
     // The grid: the closest ancestor that also holds the column headers.
     let container = best.parent;
     let headerCells = [];
@@ -1259,6 +1266,112 @@
     if (spec.enter) el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }));
     return true;
   }
+
+  // ------------------------------------------- several stores / dealers
+  //
+  // A CRM account may hold several dealerships, stores, rooftops or accounts
+  // whose data is separate, switched with a <select> or a drop-down menu in
+  // the header (or a filter beside the search). describeStores() finds such
+  // a switcher and its entries; selectStore() switches to one.
+
+  const STORE_WORDS = /dealer|dealership|store|rooftop|location|branch|account|company|franchise|division|site|entity|org\b|organi[sz]ation|group/i;
+  const PLACEHOLDER_OPTION = /^(any|all|all (stores|dealers|locations|dealerships)|select|select one|choose|please select|none|--+|-|…)$/i;
+  const captionOf = (el) => clean([labelFor(el), el.getAttribute('aria-label'), el.getAttribute('title'), el.getAttribute('placeholder'), el.name, el.id].filter(Boolean).join(' '));
+  // Entries that look like dealership names.
+  const DEALER_NAME = /\b(motors?|auto|automotive|toyota|honda|ford|chevrolet|chevy|nissan|hyundai|kia|bmw|mercedes|audi|lexus|subaru|mazda|volkswagen|vw|jeep|dodge|ram|gmc|buick|cadillac|volvo|acura|infiniti|cdjr|dealership|dealer|group|store|rooftop)\b/i;
+
+  function storeSelects() {
+    const out = [];
+    for (const sel of findEverywhere(document, 'select').filter(isVisible)) {
+      const options = [...sel.options].filter((o) => clean(o.textContent) && !PLACEHOLDER_OPTION.test(clean(o.textContent)));
+      if (options.length < 2 || options.length > 200) continue;
+      const caption = captionOf(sel);
+      const named = STORE_WORDS.test(caption) || STORE_WORDS.test(sel.className);
+      const looksLike = options.filter((o) => DEALER_NAME.test(o.textContent)).length >= Math.max(2, options.length * 0.6);
+      if (!named && !looksLike) continue;
+      out.push({ kind: 'select', css: selectorFor(sel), caption: caption || 'store', inForm: Boolean(sel.closest('form')), options: options.map((o) => ({ value: o.value, text: clean(o.textContent) })), current: sel.value });
+    }
+    return out;
+  }
+
+  function storeMenus() {
+    const out = [];
+    const candidates = findEverywhere(document, '[aria-haspopup], [role="combobox"], [role="button"], button, a, [class*="dropdown" i], [class*="switcher" i], [class*="picker" i], [class*="selector" i]').filter((el) => isVisible(el) && !el.closest('table, [role="grid"], [role="row"], form') && !inEditor(el));
+    for (const el of candidates) {
+      const text = navText(el);
+      const caption = `${text} ${el.getAttribute('aria-label') || ''} ${el.getAttribute('title') || ''}`;
+      const classy = STORE_WORDS.test(el.className) || STORE_WORDS.test(el.id || '');
+      if (!(STORE_WORDS.test(caption) || (classy && text) || (DEALER_NAME.test(text) && (el.hasAttribute('aria-haspopup') || el.getAttribute('role') === 'combobox' || /caret|chevron|arrow|dropdown/i.test(el.innerHTML))))) continue;
+      if (text.length > 80 || /sign ?out|log ?out|help|support|notification|profile|settings?|search/i.test(caption)) continue;
+      out.push({ kind: 'menu', control: describeNavEl(el), caption: text || caption.trim() });
+    }
+    return out;
+  }
+
+  // The switcher most likely to change the whole account's data: a header
+  // menu or select first, then a filter select beside a search form.
+  function describeStores() {
+    const selects = storeSelects();
+    const menus = storeMenus();
+    const headerish = (css) => {
+      try {
+        return Boolean(findAll(css).find(isVisible)?.closest('header, nav, [role="banner"], [role="navigation"], [class*="header" i], [class*="topbar" i], [class*="navbar" i], [class*="toolbar" i]'));
+      } catch {
+        return false;
+      }
+    };
+    return selects.find((s) => !s.inForm && headerish(s.css)) || menus.find((m) => headerish(m.control.css)) || selects.find((s) => !s.inForm) || menus[0] || selects[0] || null;
+  }
+
+  // Opens a menu switcher and lists its entries: [{ text, nav }]. The menu is
+  // left open; selectStore() presses an entry, or pressClose({key:'Escape'}).
+  function openStoreMenu(control) {
+    markVisible();
+    if (!pressNav(control, { toggle: true })) return null;
+    return true;
+  }
+  function storeMenuItems() {
+    const before = shownBefore;
+    shownBefore = null;
+    if (!before) return [];
+    const fresh = allElements().filter((el) => !before.has(el) && isVisible(el));
+    const items = clickables({ max: 300 }).filter((c) => {
+      const el = findEverywhere(document, `[data-cn="${c.id}"]`)[0];
+      return el && fresh.includes(el) && !PLACEHOLDER_OPTION.test(c.text) && c.role !== 'tab';
+    });
+    return items.map((c) => ({ text: c.text, nav: describeNav(c.id) }));
+  }
+
+  // Switches to one store: a select's option (by value or text), or a menu entry.
+  function selectStore(spec, entry) {
+    if (spec.kind === 'select') {
+      let sel = null;
+      try {
+        sel = findAll(spec.css).find(isVisible) ?? null;
+      } catch {
+        sel = null;
+      }
+      if (!sel) return false;
+      const option = [...sel.options].find((o) => o.value === entry.value) || [...sel.options].find((o) => clean(o.textContent) === entry.text);
+      if (!option) return false;
+      if (sel.value === option.value && entry.force !== true) return true;
+      sel.focus();
+      sel.value = option.value;
+      sel.dispatchEvent(new Event('input', { bubbles: true }));
+      sel.dispatchEvent(new Event('change', { bubbles: true }));
+      return true;
+    }
+    return entry.nav ? pressNav(entry.nav, { toggle: true }) : false;
+  }
+  const currentStore = (spec) => {
+    if (spec.kind !== 'select') return null;
+    try {
+      const sel = findAll(spec.css).find(isVisible);
+      return sel ? clean(sel.options[sel.selectedIndex]?.textContent ?? '') : null;
+    } catch {
+      return null;
+    }
+  };
 
   // A grid whose headers are weekdays or whose box is a date picker is a
   // calendar, not data.
@@ -1613,6 +1726,11 @@
     pressLoader,
     fillField,
     isDataGrid,
+    describeStores,
+    openStoreMenu,
+    storeMenuItems,
+    selectStore,
+    currentStore,
     frameInfo: () => ({ url: location.href, title: document.title, top: window === window.top, rows: dataRows(document).length }),
   };
 })();

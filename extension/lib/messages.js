@@ -6,7 +6,7 @@ import { clean } from './normalize.js';
 import { shortHash } from './records.js';
 
 export const MESSAGE_COLUMNS = [
-  'captured_at', 'site', 'crm_record_id', 'customer', 'customer_record_id', 'record_type',
+  'captured_at', 'site', 'store', 'crm_record_id', 'customer', 'customer_record_id', 'record_type',
   'channel', 'timestamp', 'direction', 'sender', 'recipient', 'subject', 'body', 'duration', 'outcome',
   'message_id',
 ];

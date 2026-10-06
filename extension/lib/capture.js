@@ -23,6 +23,7 @@ export async function buildCapture({ records = [], meta = {}, settings = {}, cap
     const row = {
       captured_at: capturedAt,
       site,
+      store: meta.store || '',
       page_title: meta.pageTitle || '',
       crm_record_id: meta.recordId || '',
       ...data,
@@ -36,7 +37,7 @@ export async function buildCapture({ records = [], meta = {}, settings = {}, cap
     messages.push(
       ...(await buildMessageRows({
         collections: record.collections,
-        base: { captured_at: capturedAt, site, crm_record_id: row.crm_record_id },
+        base: { captured_at: capturedAt, site, store: row.store, crm_record_id: row.crm_record_id },
         recordType: dataset,
         customer: rowTitle(data),
         customerRecordId: row.record_id,

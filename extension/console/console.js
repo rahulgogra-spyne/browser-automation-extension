@@ -51,6 +51,8 @@ function renderCounts(bulk) {
     ['failed', bulk.failed],
     ['pages walked', bulk.pages],
   ];
+  const stores = Object.entries(bulk.byStore ?? {});
+  if (stores.length) counts.push(['stores: ' + stores.map(([name, n]) => `${name} ${n}`).join(', '), stores.length]);
   $('now-counts').replaceChildren(...counts.map(([label, value]) => Object.assign(el('span'), { innerHTML: `<b>${value}</b> ${label}` })));
 }
 
@@ -59,7 +61,7 @@ function renderRecent(bulk) {
   body.replaceChildren(
     ...(bulk?.recent ?? []).map((r) => {
       const tr = el('tr');
-      tr.append(el('td', r.partial ? 'partial' : '', r.name || '(no name)'), el('td', '', r.kind || ''), el('td', '', String(r.fields)), el('td', '', String(r.messages)));
+      tr.append(el('td', r.partial ? 'partial' : '', r.name || '(no name)'), el('td', '', r.store ? `${r.kind} · ${r.store}` : r.kind || ''), el('td', '', String(r.fields)), el('td', '', String(r.messages)));
       const link = Object.assign(el('a', '', 'open'), { href: r.url, target: '_blank' });
       const td = el('td');
       td.append(link);
@@ -157,7 +159,7 @@ async function refreshToday() {
   try {
     const result = await send({ type: 'status' });
     const kinds = kindCounts(result.datasets);
-    $('today').textContent = `${result.count} records${kinds ? ` (${kinds})` : ''}, ${result.messages} messages → Downloads/${result.filename}`;
+    $('today').textContent = `${result.count} records${kinds ? ` (${kinds.replace(/@/g, ' · ')})` : ''}, ${result.messages} messages → Downloads/${result.filename}`;
     failedWriteDate = result.lastWriteError?.date ?? null;
     $('retry').hidden = !failedWriteDate;
     if (result.lastWriteError) $('now-note').textContent = result.lastWriteError.message;

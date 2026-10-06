@@ -72,5 +72,5 @@ export async function buildRecordId(row, { byContact = true } = {}) {
         .filter((key) => !META_KEYS.has(key))
         .sort()
         .map((key) => `${key}=${row[key]}`);
-  return shortHash([row.site, row.dealer_name, ...identity].map((p) => String(p || '').toLowerCase().trim()).join('|'));
+  return shortHash([row.site, row.store, row.dealer_name, ...identity].map((p) => String(p || '').toLowerCase().trim()).join('|'));
 }

@@ -167,7 +167,7 @@ function startRun({ crmId, name, phase }) {
   const stats = {
     status: 'running', crmId, name, startedAt: Date.now(),
     lists: 0, pages: 0, found: 0, total: 0, captured: 0, partial: 0, failed: 0, saved: 0, messages: 0,
-    byKind: {}, files: [], phase, log: [], recent: [],
+    byKind: {}, byStore: {}, files: [], phase, log: [], recent: [],
   };
   const note = (line) => {
     stats.log.push(`${new Date().toLocaleTimeString()}  ${line}`);
@@ -400,15 +400,17 @@ async function captureItems(run, ctx, items) {
       const verdict = assessExtraction(recordType, result);
       if (!result || !Object.keys(result.fields).length) throw new Error(`nothing read (${describeProblems(verdict) || 'no fields'})`);
       const record = toRecord(result);
-      run.pending.push({ fields: Object.fromEntries(record.fields.map((f) => [f.key, f.value])), collections: record.collections, pageUrl: item.url, recordId: item.recordId, dataset: kind });
+      const store = item.store ?? ctx.store ?? null;
+      run.pending.push({ fields: Object.fromEntries(record.fields.map((f) => [f.key, f.value])), collections: record.collections, pageUrl: item.url, recordId: item.recordId, dataset: kind, store });
       stats.captured++;
       if (!verdict.ok) stats.partial++;
       stats.byKind[kind] = (stats.byKind[kind] ?? 0) + 1;
+      if (store) stats.byStore[store] = (stats.byStore[store] ?? 0) + 1;
       const name = rowTitle(record.fields) || item.title || item.url;
       const messages = Object.values(record.collections).reduce((n, l) => n + l.length, 0);
-      stats.recent.unshift({ name, kind, fields: record.fields.length, messages, url: item.url, partial: !verdict.ok });
+      stats.recent.unshift({ name, kind, store, fields: record.fields.length, messages, url: item.url, partial: !verdict.ok });
       if (stats.recent.length > 60) stats.recent.pop();
-      note(`Captured ${name} (${kind}): ${record.fields.length} fields, ${messages} messages${verdict.ok ? '' : ` — layout did not fully fit (${describeProblems(verdict)})`} — ${item.url}`);
+      note(`Captured ${name} (${kind}${store ? `, ${store}` : ''}): ${record.fields.length} fields, ${messages} messages${verdict.ok ? '' : ` — layout did not fully fit (${describeProblems(verdict)})`} — ${item.url}`);
       data(describeRecord(record.fields, record.collections));
     } catch (error) {
       stats.failed++;
@@ -586,7 +588,15 @@ async function replayLoadSteps(tabId, steps = []) {
 // from a previous run before it); when that reads nothing, the Search button
 // on screen is pressed and the grid learned afresh. Returns { table, read,
 // learned, pressed } with read = { rows, signature }, or null.
-async function loadGrid(tabId, ctx, screen, { note }) {
+async function loadGrid(tabId, ctx, screen, { note, pressFirst = false }) {
+  // After a store switch the grid may still show the previous store's rows: run the search again first.
+  if (pressFirst) {
+    const pressed = (await inFrames(tabId, () => window.__crmRuntime?.pressLoader?.() ?? null)).map((f) => f.result).find(Boolean) ?? null;
+    if (pressed) {
+      note(`"${screen.entity}": pressed "${pressed.text}" to load this store's data`);
+      await settleTab(tabId);
+    }
+  }
   const readWith = async (table) => (await inFrames(tabId, (spec) => window.__crmRuntime?.readTable?.(spec) ?? null, [table])).map((f) => f.result).find((r) => r?.rows?.length) ?? null;
   const usable = (table) => table && (table.columns?.length ?? 0) > 0 && !/datepicker|calendar/i.test(table.container || '') && !(table.headers?.length >= 5 && table.headers.every((h) => /^(su|mo|tu|we|th|fr|sa|s|m|t|w|f)$/i.test(h)));
   const learnedBefore = ctx.crmId && screen.id ? await getLearnedGrid(ctx.crmId, screen.id) : null;
@@ -694,6 +704,121 @@ async function openRowPage(tabId, screen, index) {
   return after !== before ? after : null;
 }
 
+// ----------------------------------------- several stores / dealers
+//
+// A CRM account may hold several dealerships / stores / rooftops whose data
+// is separate: a switcher in the header, or a store filter beside the
+// search. On every screen (and on "Capture this tab") the switcher is looked
+// for; when there is one, the screen is read once per store, each store's
+// rows going to their own files. crm.stores in the layout can turn this off
+// (false), name the switcher ({ select: { css } } or { menu: { control } }),
+// or restrict the stores ({ only: ["Store A", "Store B"] }).
+
+const storeSlug = (name) => String(name ?? '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40);
+
+// The switcher on screen in tabId: { spec, frameId, entries: [{ text, value?, nav? }] } or null.
+async function findStores(tabId, ctx) {
+  const config = ctx.crm.stores;
+  if (config === false) return null;
+  let found = null;
+  if (config?.select || config?.menu) {
+    const spec = config.select ? { kind: 'select', css: config.select.css } : { kind: 'menu', control: config.menu.control };
+    found = { spec, frameId: 0 };
+  } else {
+    const hits = (await inFrames(tabId, () => window.__crmRuntime?.describeStores?.() ?? null)).filter((f) => f.result);
+    const top = hits.find((f) => f.frameId === 0) ?? hits[0];
+    if (!top) return null;
+    found = { spec: top.result, frameId: top.frameId };
+  }
+  const inFrame = async (func, args = []) => {
+    const [r] = await chrome.scripting.executeScript({ target: { tabId, frameIds: [found.frameId] }, func, args }).catch(() => []);
+    return r?.result ?? null;
+  };
+  let entries = [];
+  if (found.spec.kind === 'select') {
+    if (!found.spec.options) {
+      const full = await inFrame((css) => {
+        const sel = document.querySelector(css);
+        return sel ? [...sel.options].map((o) => ({ value: o.value, text: o.textContent.trim() })).filter((o) => o.text) : [];
+      }, [found.spec.css]);
+      entries = full ?? [];
+    } else entries = found.spec.options;
+  } else {
+    if (!(await inFrame((control) => window.__crmRuntime?.openStoreMenu?.(control) ?? null, [found.spec.control]))) return null;
+    await settleQuick(tabId);
+    entries = (await inFrame(() => window.__crmRuntime?.storeMenuItems?.() ?? [])) ?? [];
+    await inFrame(() => window.__crmRuntime?.pressClose?.({ key: 'Escape' }));
+    await settleQuick(tabId);
+  }
+  if (Array.isArray(config?.only)) {
+    const want = new Set(config.only.map((n) => n.toLowerCase()));
+    entries = entries.filter((e) => want.has(e.text.toLowerCase()));
+  }
+  // One entry is no choice; too many is not a store switcher.
+  if (entries.length < 2 || entries.length > 60) return null;
+  return { ...found, entries };
+}
+
+// Switches the tab to one store. Whether the switch was made.
+async function switchStore(tabId, stores, entry) {
+  const inFrame = async (func, args = []) => {
+    const [r] = await chrome.scripting.executeScript({ target: { tabId, frameIds: [stores.frameId] }, func, args }).catch(() => []);
+    return r?.result ?? null;
+  };
+  if (stores.spec.kind === 'menu') {
+    if (!(await inFrame((control) => window.__crmRuntime?.openStoreMenu?.(control) ?? null, [stores.spec.control]))) return false;
+    await settleQuick(tabId);
+  }
+  const done = await inFrame((spec, e) => window.__crmRuntime?.selectStore?.(spec, e) ?? false, [stores.spec, { ...entry, force: true }]);
+  if (!done) return false;
+  await followScriptLinks(tabId);
+  await new Promise((r) => setTimeout(r, 400));
+  if ((await chrome.tabs.get(tabId).catch(() => null))?.status === 'loading') await waitForTabLoad(tabId).catch(() => {});
+  await settleTab(tabId);
+  return true;
+}
+
+// Reaches a screen in a tab (its path, then its load steps); the caption of
+// a step that failed, or null.
+async function reachScreen(tabId, screen, note) {
+  const stuck = await replayPathInTab(tabId, screen.path ?? []);
+  if (stuck) return stuck;
+  const undone = await replayLoadSteps(tabId, screen.load ?? []);
+  if (undone) note(`"${screen.entity}": the load step "${undone}" could not be done; reading what is on screen`);
+  return null;
+}
+
+// Reads a screen for every store the tab offers (or once when it offers
+// none): switch, come back to the screen, re-run its search, read.
+async function walkScreenPerStore(run, ctx, screen, tabId, queue, { kind }) {
+  const { note } = run;
+  const stores = await findStores(tabId, ctx);
+  if (!stores) return walkScreen(run, ctx, screen, tabId, queue, { kind, store: ctx.store ?? null });
+  const names = stores.entries.map((e) => e.text);
+  if (!run.storesNoted) {
+    note(`Found ${names.length} stores/dealers (${stores.spec.kind === 'select' ? `"${stores.spec.caption || 'select'}"` : `menu "${stores.spec.caption}"`}): ${names.join(' · ')}. Each is captured to its own files.`);
+    run.storesNoted = true;
+  }
+  for (const entry of stores.entries) {
+    if (cancelRequested) break;
+    run.stats.phase = `"${screen.entity}": switching to ${entry.text}`;
+    await run.publish();
+    if (!(await switchStore(tabId, stores, entry))) {
+      note(`Could not switch to ${entry.text}; skipped`);
+      continue;
+    }
+    // The app may have gone back to its home: reach the screen again (steps already on screen are skipped).
+    const stuck = await reachScreen(tabId, screen, note);
+    if (stuck) {
+      note(`${entry.text}: could not get back to "${screen.entity}" ("${stuck}" not found); skipped`);
+      continue;
+    }
+    note(`— ${entry.text} —`);
+    await walkScreen(run, ctx, screen, tabId, queue, { kind, store: entry.text, pressFirst: true });
+    await flushRun(run, ctx);
+  }
+}
+
 // Screens of a click-driven CRM (one address for everything): each is the
 // path of clicks that leads to it from the start page, optional load steps
 // (fill a filter, press Search) and the grid found there. Capturing one
@@ -713,15 +838,13 @@ async function captureScreens(run, ctx, screens) {
     await run.publish();
     try {
       await withBackgroundTab(startUrl, async (tab) => {
-        const stuck = await replayPathInTab(tab.id, screen.path ?? []);
+        const stuck = await reachScreen(tab.id, screen, note);
         if (stuck) {
           stats.failed++;
           note(`Could not reach "${screen.entity}": "${stuck}" was not found on screen`);
           return;
         }
-        const undone = await replayLoadSteps(tab.id, screen.load ?? []);
-        if (undone) note(`"${screen.entity}": the load step "${undone}" could not be done; reading what is on screen`);
-        await walkScreen(run, ctx, screen, tab.id, queue, { kind });
+        await walkScreenPerStore(run, ctx, screen, tab.id, queue, { kind });
       });
     } catch (error) {
       stats.failed++;
@@ -738,11 +861,11 @@ async function captureScreens(run, ctx, screens) {
 // Reads a screen's grid in tabId page after page: each row is saved as a
 // record of its kind, or queued (rows that link to a mapped record page),
 // or opened in place / by click when the screen says so.
-async function walkScreen(run, ctx, screen, tabId, queue, { kind = null } = {}) {
+async function walkScreen(run, ctx, screen, tabId, queue, { kind = null, store = null, pressFirst = false } = {}) {
   const { stats, note, data } = run;
   const recordType = screen.recordPageType ? ctx.crm.pageTypes.find((pt) => pt.id === screen.recordPageType) : null;
   const startUrl = screen.url || ctx.crm.startUrl;
-  const first = await loadGrid(tabId, ctx, screen, { note });
+  const first = await loadGrid(tabId, ctx, screen, { note, pressFirst });
   if (!first) {
     note(`"${screen.entity}": no data grid on screen (nothing to read)`);
     return;
@@ -752,7 +875,7 @@ async function walkScreen(run, ctx, screen, tabId, queue, { kind = null } = {}) 
     kind = guessDataset(table.headers ?? []);
     note(`"${screen.entity}": the grid looks like ${kind} (${(table.headers ?? []).filter(Boolean).slice(0, 8).join(', ')})`);
   }
-  const gridId = `${kind}|${table.container}|${(table.headers ?? []).join('|')}|${first.read.signature}`;
+  const gridId = `${store ?? ''}|${kind}|${table.container}|${(table.headers ?? []).join('|')}|${first.read.signature}`;
   if (run.grids.has(gridId)) {
     note(`"${screen.entity}": the same grid was already read under another screen; skipped`);
     return;
@@ -791,11 +914,11 @@ async function walkScreen(run, ctx, screen, tabId, queue, { kind = null } = {}) 
         const id = `${recordType.id}:${match[1] || row.link}`;
         if (run.seen.has(id)) continue;
         run.seen.add(id);
-        queue.push({ url: row.link, title: rowTitle(fields), recordTypeId: recordType.id, recordId: match[1] ?? '' });
+        queue.push({ url: row.link, title: rowTitle(fields), recordTypeId: recordType.id, recordId: match[1] ?? '', store });
         stats.found++;
         continue;
       }
-      const id = `${screen.id}:${JSON.stringify(fields)}`;
+      const id = `${store ?? ''}|${screen.id}:${JSON.stringify(fields)}`;
       if (run.seen.has(id)) continue;
       run.seen.add(id);
       if (recordType && screen.rowOpen) {
@@ -816,17 +939,18 @@ async function walkScreen(run, ctx, screen, tabId, queue, { kind = null } = {}) 
           stats.partial++;
         }
       }
-      run.pending.push({ fields: record.fields, collections: record.collections, pageUrl: row.link || startUrl, dataset: kind });
+      run.pending.push({ fields: record.fields, collections: record.collections, pageUrl: row.link || startUrl, dataset: kind, store });
       taken++;
       stats.found++;
       stats.total++;
       stats.captured++;
       stats.byKind[kind] = (stats.byKind[kind] ?? 0) + 1;
+      if (store) stats.byStore[store] = (stats.byStore[store] ?? 0) + 1;
       const name = rowTitle(record.fields) || `row ${index + 1}`;
       const messages = Object.values(record.collections).reduce((n, l) => n + l.length, 0);
-      stats.recent.unshift({ name, kind, fields: Object.keys(record.fields).length, messages, url: row.link || startUrl, partial: Boolean(problem) });
+      stats.recent.unshift({ name, kind, store, fields: Object.keys(record.fields).length, messages, url: row.link || startUrl, partial: Boolean(problem) });
       if (stats.recent.length > 60) stats.recent.pop();
-      note(`Captured ${name} (${kind}) from "${screen.entity}" page ${pageNo + 1}: ${Object.keys(record.fields).length} fields, ${messages} messages${problem ? ` — the panel did not fully fit (${problem})` : ''}`);
+      note(`Captured ${name} (${kind}${store ? `, ${store}` : ''}) from "${screen.entity}" page ${pageNo + 1}: ${Object.keys(record.fields).length} fields, ${messages} messages${problem ? ` — the panel did not fully fit (${problem})` : ''}`);
       data(describeRecord(record.fields, record.collections));
       if (run.pending.length >= 10) await flushRun(run, ctx);
       await run.publish();
@@ -843,7 +967,7 @@ async function walkScreen(run, ctx, screen, tabId, queue, { kind = null } = {}) 
         const id = `${recordType.id}:${opened[1] || url}`;
         if (!run.seen.has(id)) {
           run.seen.add(id);
-          queue.push({ url, title, recordTypeId: recordType.id, recordId: opened[1] ?? '' });
+          queue.push({ url, title, recordTypeId: recordType.id, recordId: opened[1] ?? '', store });
           stats.found++;
         }
       } else note(`${title || `Row ${index + 1}`}: clicking it did not open a ${recordType.entity || 'record'} page`);
@@ -891,7 +1015,7 @@ async function captureHere({ tabId, dataset = null }) {
   try {
     const queue = [];
     await inject(tab.id, ['content/crm-runtime.js']);
-    await walkScreen(run, ctx, screen, tab.id, queue, { kind });
+    await walkScreenPerStore(run, ctx, screen, tab.id, queue, { kind });
     await flushRun(run, ctx);
     if (queue.length) {
       run.note(`${queue.length} record(s) to capture from the pages the rows open`);
@@ -1107,15 +1231,19 @@ async function save({ records = [], meta = {} }) {
   const capturedAt = localTimestamp();
   const byKind = new Map();
   const newMessages = [];
+  const byStore = new Map(); // store slug -> messages
   for (const record of records) {
     const wanted = record.dataset ?? meta.dataset ?? 'customers';
     const dataset = datasetById(wanted)?.id ?? OTHER_DATASET;
     const person = DATASETS[dataset]?.person ?? true;
-    const recordMeta = { ...meta, pageUrl: record.pageUrl || meta.pageUrl, recordId: record.recordId ?? meta.recordId };
+    const store = record.store ?? meta.store ?? '';
+    const recordMeta = { ...meta, pageUrl: record.pageUrl || meta.pageUrl, recordId: record.recordId ?? meta.recordId, store };
     const built = await buildCapture({ records: [record], meta: recordMeta, settings, capturedAt, dataset, person });
     if (!built.rows.length) continue;
-    byKind.set(dataset, [...(byKind.get(dataset) ?? []), ...built.rows]);
-    newMessages.push(...built.messages);
+    const slug = storeSlug(store);
+    const key = slug ? `${dataset}@${slug}` : dataset;
+    byKind.set(key, [...(byKind.get(key) ?? []), ...built.rows]);
+    byStore.set(slug, [...(byStore.get(slug) ?? []), ...built.messages]);
   }
   if (!byKind.size) throw new Error('Nothing to save.');
 
@@ -1123,14 +1251,21 @@ async function save({ records = [], meta = {} }) {
   return serialized(async () => {
     let added = 0;
     let updated = 0;
-    for (const [dataset, rows] of byKind) {
-      const result = await upsertRows(date, rows, dataset, { byContact: DATASETS[dataset]?.person ?? true });
+    for (const [key, rows] of byKind) {
+      const [dataset, slug = ''] = key.split('@');
+      const result = await upsertRows(date, rows, dataset, { byContact: DATASETS[dataset]?.person ?? true, store: slug });
       added += result.added;
       updated += result.updated;
     }
-    const { messages, added: messagesAdded } = await addMessages(date, newMessages);
+    let messagesTotal = 0;
+    let messagesAdded = 0;
+    for (const [slug, list] of byStore) {
+      const { messages, added: fresh } = await addMessages(date, list, { store: slug });
+      messagesTotal += messages.length;
+      messagesAdded += fresh;
+    }
     const files = await writeDayFiles(date, settings, { only: [...byKind.keys()] });
-    return { date, messages: messages.length, added, updated, messagesAdded, saved: Object.fromEntries([...byKind].map(([k, rows]) => [k, rows.length])), ...files };
+    return { date, messages: files.messages, added, updated, messagesAdded, saved: Object.fromEntries([...byKind].map(([k, rows]) => [k, rows.length])), ...files };
   });
 }
 
@@ -1144,26 +1279,47 @@ async function writeDay({ date }) {
   });
 }
 
+// day.datasets is keyed "kind" or "kind@store"; day.messages by store ('' for none).
 async function dayCounts(date) {
   const day = await getDay(date);
-  const datasets = Object.fromEntries(Object.entries(day.datasets).map(([kind, rows]) => [kind, rows.length]));
-  return { day, datasets, count: Object.values(datasets).reduce((a, b) => a + b, 0), messages: day.messages.length };
+  const datasets = Object.fromEntries(Object.entries(day.datasets).map(([key, rows]) => [key, rows.length]));
+  const messages = Object.values(day.messages).reduce((n, list) => n + list.length, 0);
+  return { day, datasets, count: Object.values(datasets).reduce((a, b) => a + b, 0), messages };
 }
 
-// One file per kind of data (only: just the kinds that changed), plus the
-// day's messages and the reference values gathered from every row.
+// One file per kind of data and store (only: just the keys that changed),
+// plus each store's messages and the reference values gathered from its rows.
 async function writeDayFiles(date, settings, { only = null } = {}) {
-  const { day, datasets, count } = await dayCounts(date);
-  const kinds = Object.keys(day.datasets).filter((kind) => !only || only.includes(kind));
-  const names = kinds.map((kind) => csvFileName(settings, date, kind));
-  const messagesFilename = day.messages.length ? csvFileName(settings, date, 'messages') : null;
-  const reference = referenceRows(day);
-  const referenceFilename = reference.length ? csvFileName(settings, date, 'reference') : null;
-  const out = { count, datasets, filename: names.join(', '), messagesFilename, referenceFilename, files: [...names, messagesFilename, referenceFilename].filter(Boolean) };
+  const { day, datasets, count, messages } = await dayCounts(date);
+  const keys = Object.keys(day.datasets).filter((key) => !only || only.includes(key));
+  const stores = new Set([...keys.map((k) => k.split('@')[1] ?? ''), ...(only ? only.map((k) => k.split('@')[1] ?? '') : Object.keys(day.messages))]);
+  const files = [];
+  const jobs = [];
+  for (const key of keys) {
+    const [kind, slug = ''] = key.split('@');
+    const name = csvFileName(settings, date, kind, slug);
+    files.push(name);
+    jobs.push([name, () => toCsv(day.datasets[key])]);
+  }
+  let messagesFilename = null;
+  for (const slug of stores) {
+    const list = day.messages[slug] ?? [];
+    if (list.length) {
+      const name = csvFileName(settings, date, 'messages', slug);
+      messagesFilename ??= name;
+      files.push(name);
+      jobs.push([name, () => toCsv(list, MESSAGE_COLUMNS)]);
+    }
+    const rows = referenceRows({ datasets: Object.fromEntries(Object.entries(day.datasets).filter(([k]) => (k.split('@')[1] ?? '') === slug).map(([k, v]) => [k.split('@')[0], v])) });
+    if (rows.length) {
+      const name = csvFileName(settings, date, 'reference', slug);
+      files.push(name);
+      jobs.push([name, () => toCsv(rows, REFERENCE_COLUMNS)]);
+    }
+  }
+  const out = { count, datasets, messages, filename: files.filter((f) => !/_(messages|reference)(_|\.)/.test(f.split('/').pop())).join(', '), messagesFilename, files };
   try {
-    for (const [i, kind] of kinds.entries()) await writeCsvFile(names[i], toCsv(day.datasets[kind]));
-    if (messagesFilename) await writeCsvFile(messagesFilename, toCsv(day.messages, MESSAGE_COLUMNS));
-    if (referenceFilename) await writeCsvFile(referenceFilename, toCsv(reference, REFERENCE_COLUMNS));
+    for (const [name, csv] of jobs) await writeCsvFile(name, csv());
     await chrome.storage.local.remove('lastWriteError');
     if (date === localDateKey()) await showCount(count);
     return out;
@@ -1183,8 +1339,8 @@ async function status() {
   const { lastWriteError } = await chrome.storage.local.get('lastWriteError');
   if (!lastWriteError) await showCount(count);
   // One file per kind: "<prefix>_<kind>_<date>.csv".
-  const filename = csvFileName(settings, date, 'KIND').replace('KIND', '<kind>');
-  return { date, count, datasets, messages, filename, files: Object.keys(datasets).map((kind) => csvFileName(settings, date, kind)), lastWriteError: lastWriteError ?? null };
+  const filename = csvFileName(settings, date, 'KIND', 'STORE').replace('KIND', '<kind>').replace('_STORE', '[_<store>]');
+  return { date, count, datasets, messages, filename, files: Object.keys(datasets).map((key) => csvFileName(settings, date, ...key.split('@'))), lastWriteError: lastWriteError ?? null };
 }
 
 async function showCount(count) {
