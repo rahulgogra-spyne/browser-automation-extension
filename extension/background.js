@@ -18,6 +18,7 @@ import { detectSite } from './lib/site.js';
 import { writeCsvFile, writeTextFile } from './lib/sinks/local-downloads.js';
 import { nextPageUrl, isPagedUrl } from './lib/paging.js';
 import { followScriptLinks } from './lib/follow-links.js';
+import { execScript, onCancelCheck } from './lib/exec.js';
 import { adoptOpenedTab } from './lib/opened-tabs.js';
 import { DATASETS, OTHER_DATASET, datasetById, datasetOfPageType, datasetsOfCrm, rowTitle } from './lib/datasets.js';
 import { referenceRows, REFERENCE_COLUMNS } from './lib/reference.js';
@@ -175,6 +176,7 @@ const matchesType = (pageType, url) => {
 
 let bulkInProgress = null;
 let cancelRequested = false;
+onCancelCheck(() => cancelRequested);
 
 // One capture run; its stats are what the capture window shows.
 function startRun({ crmId, name, phase }) {
@@ -378,8 +380,7 @@ async function captureLists(run, ctx, lists, { startUrl = null } = {}) {
 // expanded fully first. spec null: an unmapped page offers every link on it.
 async function readListPage(tabId, spec, { expand }) {
   await inject(tabId, ['content/crm-runtime.js']); // again: a postback reloads the page
-  const results = await chrome.scripting
-    .executeScript({
+  const results = await execScript({
       target: { tabId, allFrames: true },
       func: async (spec, expand) => {
         const rt = window.__crmRuntime;
@@ -393,7 +394,7 @@ async function readListPage(tabId, spec, { expand }) {
         return { entries, next: rt.nextPageLink(), pager, expanded };
       },
       args: [spec, expand],
-    })
+    }, { long: true })
     .catch(() => []);
   return results.map((r) => r.result).find((r) => r?.entries?.length) ?? results.map((r) => r.result).find(Boolean) ?? { entries: [], next: null, pager: false };
 }
@@ -464,12 +465,12 @@ async function captureItems(run, ctx, items) {
 }
 
 // Runs func in every frame of the tab; [{ frameId, result }].
-async function inFrames(tabId, func, args = []) {
-  await inject(tabId, ['content/crm-runtime.js']);
+async function inFrames(tabId, func, args = [], opts = {}) {
+  await inject(tabId, ['content/crm-runtime.js'], opts);
   // Framework click handlers leave no trace in the DOM: mark them from the page's world.
-  await chrome.scripting.executeScript({ target: { tabId, allFrames: true }, files: ['content/mark-handlers.js'], world: 'MAIN' }).catch(() => {});
+  await execScript({ target: { tabId, allFrames: true }, files: ['content/mark-handlers.js'], world: 'MAIN' }, opts.timeoutMs ? opts : {}).catch(() => {});
   try {
-    const results = await chrome.scripting.executeScript({ target: { tabId, allFrames: true }, func, args });
+    const results = await execScript({ target: { tabId, allFrames: true }, func, args }, opts);
     return results.map((r) => ({ frameId: r.frameId, result: r.result }));
   } catch {
     return [];
@@ -498,8 +499,7 @@ async function pressStepInTab(tabId, step, tries = 12) {
   for (let attempt = 0; attempt < tries; attempt++) {
     const frameId = await frameWithStep(tabId, step);
     if (frameId !== null) {
-      const [pressed] = await chrome.scripting
-        .executeScript({ target: { tabId, frameIds: [frameId] }, func: (spec) => window.__crmRuntime.pressNav(spec), args: [step.nav] })
+      const [pressed] = await execScript({ target: { tabId, frameIds: [frameId] }, func: (spec) => window.__crmRuntime.pressNav(spec), args: [step.nav] })
         .catch(() => []);
       if (pressed?.result) {
         await settleTab(tabId);
@@ -886,7 +886,7 @@ const DEALER_WORD = /\b(motors?|auto|automotive|autos|cars|toyota|honda|ford|che
 const dealerLike = (items) => items.filter((i) => DEALER_CODE.test(i.raw || i.text) || DEALER_WORD.test(i.raw || i.text)).length;
 
 const inFrameOf = (tabId, frameId) => async (func, args = []) => {
-  const [r] = await chrome.scripting.executeScript({ target: { tabId, frameIds: [frameId] }, func, args }).catch(() => []);
+  const [r] = await execScript({ target: { tabId, frameIds: [frameId] }, func, args }).catch(() => []);
   return r?.result ?? null;
 };
 
@@ -1022,6 +1022,28 @@ async function reachScreen(tabId, screen, note) {
   return null;
 }
 
+// Whether url shows the application within a short while: the screen's first
+// steps that belong to the application itself (after the launcher's card)
+// are on screen. Every call into the page is given seconds, not minutes.
+async function appShows(url, screen) {
+  const quick = { timeoutMs: 12_000 };
+  const steps = (screen.path ?? []).slice(1, 3);
+  if (!steps.length) return true;
+  return withBackgroundTab(
+    url,
+    async (tab) => {
+      for (const until = Date.now() + 20_000; Date.now() < until && !cancelRequested; ) {
+        for (const step of steps) {
+          if ((await inFrames(tab.id, (spec) => window.__crmRuntime?.hasNav?.(spec) ?? false, [step.nav], quick)).some((f) => f.result)) return true;
+        }
+        await new Promise((r) => setTimeout(r, 1500));
+      }
+      return false;
+    },
+    { quick: true },
+  );
+}
+
 // Screens of a click-driven CRM (one address for everything): each is the
 // path of clicks that leads to it, optional load steps (fill a filter, press
 // Search) and the grid found there. The CRM is loaded once; then, for every
@@ -1041,9 +1063,25 @@ async function captureScreens(run, ctx, screens) {
     if (!screen.url && ctx.crm.directUrl && ctx.crm.startUrl && ctx.crm.startUrl !== startUrl) fallbackOf.set(startUrl, ctx.crm.startUrl);
     byStart.set(startUrl, [...(byStart.get(startUrl) ?? []), screen]);
   }
-  for (const [startUrl, group] of byStart) {
+  for (const [directOrStart, group] of byStart) {
     if (cancelRequested) break;
     const queue = [];
+    let startUrl = directOrStart;
+    // The application's own page (the session as it is) must show the application within seconds:
+    // a page that asks to sign in, shows a dialog or never loads is left for the launcher.
+    if (fallbackOf.has(directOrStart)) {
+      stats.phase = `Opening the CRM at its own address (${directOrStart.split('?')[0]})…`;
+      note(stats.phase);
+      await run.publish();
+      const shows = await appShows(directOrStart, group[0]).catch(() => false);
+      if (!shows && !cancelRequested) {
+        startUrl = fallbackOf.get(directOrStart);
+        note(`The CRM's own page did not show the application (not signed in there, a dialog on it, or it only runs inside its launcher): going through the launcher (${startUrl.split('?')[0]}), which may start on the account's default store`);
+        await endJob({ keepConsoleBehind: true }); // a tab stuck on a dialog is closed, not reused
+      }
+    }
+    stats.phase = `Opening ${startUrl.split('?')[0]}…`;
+    await run.publish();
     try {
       await withBackgroundTab(startUrl, async (tab) => {
         const seen = await tabVisibility(tab.id);
@@ -1065,14 +1103,7 @@ async function captureScreens(run, ctx, screens) {
           }
           return null;
         };
-        entered = await enter(fallbackOf.has(startUrl));
-        if (!entered && fallbackOf.has(startUrl)) {
-          home = fallbackOf.get(startUrl);
-          note(`The CRM's own page did not show the application (not signed in there, or it only runs inside its launcher): going through the launcher, which may start on the account's default store`);
-          await navigateTab(tab.id, home);
-          await settleTab(tab.id);
-          entered = await enter(false);
-        }
+        entered = await enter(false);
         if (!entered) {
           stats.failed++;
           return;
@@ -1175,7 +1206,7 @@ async function walkScreen(run, ctx, screen, tabId, queue, { kind = null, store =
   }
   run.grids.add(gridId);
   // Every row of the page, scrolling a grid that only renders what is in view.
-  const readNow = async () => (await inFrames(tabId, async (spec) => (await window.__crmRuntime?.readTableScrolled?.(spec)) ?? null, [table])).map((f) => f.result).find((r) => r?.rows?.length) ?? null;
+  const readNow = async () => (await inFrames(tabId, async (spec) => (await window.__crmRuntime?.readTableScrolled?.(spec)) ?? null, [table], { long: true })).map((f) => f.result).find((r) => r?.rows?.length) ?? null;
   // A grid with no pager may grow as it is scrolled ("Show more", infinite scroll): all of it first.
   const grown = await inFrames(
     tabId,
@@ -1185,6 +1216,7 @@ async function walkScreen(run, ctx, screen, tabId, queue, { kind = null, store =
       return rt.expandAll({ rows: `${spec.container} ${spec.row ? spec.row.replace(/^:scope\s*>?\s*/, '') : 'tr'}` });
     },
     [table],
+    { long: true },
   );
   const rounds = Math.max(0, ...grown.map((f) => f.result || 0));
   if (rounds > 1) note(`"${screen.entity}": expanded the grid in place (${rounds} rounds of "show more"/scrolling)`);
@@ -1504,26 +1536,26 @@ async function openWorkTab(url) {
 
 // Loads url in a work tab (reused across calls), waits for it to render, runs
 // fn(tab) and hands the tab back for the next page.
-async function withBackgroundTab(url, fn) {
+async function withBackgroundTab(url, fn, { quick = false } = {}) {
   let slot = work.tabs.find((t) => !t.busy);
   const shownBefore = work.tabs.find((t) => t.shown)?.id ?? null;
   if (!slot) {
     const tab = await openWorkTab(url);
     slot = { id: tab.id, busy: true, url };
     work.tabs.push(slot);
-    await waitForTabLoad(tab.id);
+    await waitForTabLoad(tab.id, quick ? 12_000 : 25_000);
   } else {
     slot.busy = true;
     slot.url = url;
     await chrome.tabs.update(slot.id, { active: true }).catch(() => {});
-    await navigateTab(slot.id, url);
+    await navigateTab(slot.id, url, quick ? 12_000 : 25_000);
   }
   for (const t of work.tabs) t.shown = t === slot;
   try {
-    await inject(slot.id, ['content/crm-runtime.js']);
-    await chrome.scripting
-      .executeScript({ target: { tabId: slot.id, allFrames: true }, func: () => window.__crmRuntime?.waitQuiet({ quietMs: 1000, timeoutMs: 15000 }) })
-      .catch(() => {});
+    // A page that does not answer (a dialog on it) fails here in seconds, not never.
+    const opts = { timeoutMs: quick ? 12_000 : 40_000 };
+    await inject(slot.id, ['content/crm-runtime.js'], opts);
+    await execScript({ target: { tabId: slot.id, allFrames: true }, func: () => window.__crmRuntime?.waitQuiet({ quietMs: 1000, timeoutMs: 15000 }) }, opts).catch(() => {});
     return await fn({ id: slot.id });
   } finally {
     slot.busy = false;
@@ -1536,16 +1568,16 @@ async function withBackgroundTab(url, fn) {
 }
 
 // Closes the work tabs once a job is over and shows the capture page again.
-async function endJob() {
+async function endJob({ keepConsoleBehind = false } = {}) {
   const ids = work.tabs.map((t) => t.id);
   work.tabs = [];
-  if (work.consoleTabId != null) await chrome.tabs.update(work.consoleTabId, { active: true }).catch(() => {});
+  if (!keepConsoleBehind && work.consoleTabId != null) await chrome.tabs.update(work.consoleTabId, { active: true }).catch(() => {});
   await Promise.all(ids.map((id) => chrome.tabs.remove(id).catch(() => {})));
 }
 
 // Whether the pages being read are actually drawn by the browser.
 async function tabVisibility(tabId) {
-  const [r] = await chrome.scripting.executeScript({ target: { tabId }, func: () => ({ state: document.visibilityState, size: `${innerWidth}x${innerHeight}` }) }).catch(() => []);
+  const [r] = await execScript({ target: { tabId }, func: () => ({ state: document.visibilityState, size: `${innerWidth}x${innerHeight}` }) }).catch(() => []);
   return r?.result ?? null;
 }
 
@@ -1577,7 +1609,7 @@ function waitForTabLoad(tabId, timeoutMs = 25_000) {
       else resolve();
     };
     const onUpdated = (id, info) => id === tabId && info.status === 'complete' && done();
-    const timer = setTimeout(() => done(new Error('the page took too long to load')), timeoutMs);
+    const timer = setTimeout(() => done(), timeoutMs); // still loading something: used as it is
     chrome.tabs.onUpdated.addListener(onUpdated);
     chrome.tabs.get(tabId).then(
       (tab) => tab.status === 'complete' && done(),
@@ -1586,12 +1618,13 @@ function waitForTabLoad(tabId, timeoutMs = 25_000) {
   });
 }
 
-async function inject(tabId, files) {
+async function inject(tabId, files, opts = {}) {
+  const quick = opts.timeoutMs ? opts : {};
   try {
-    await chrome.scripting.executeScript({ target: { tabId, allFrames: true }, files });
+    await execScript({ target: { tabId, allFrames: true }, files }, quick);
   } catch {
     // A frame we can't script (e.g. an error page) can fail the whole call.
-    await chrome.scripting.executeScript({ target: { tabId }, files });
+    await execScript({ target: { tabId }, files }, quick).catch(() => {});
   }
 }
 
@@ -1599,11 +1632,11 @@ async function runInPage(tabId, pageType) {
   await inject(tabId, ['content/crm-runtime.js']);
   let results;
   try {
-    results = await chrome.scripting.executeScript({
+    results = await execScript({
       target: { tabId, allFrames: true },
       func: (pt) => window.__crmRuntime?.extractPage(pt) ?? null,
       args: [pageType],
-    });
+    }, { long: true });
   } catch {
     return null;
   }
@@ -1622,7 +1655,7 @@ async function extractWithConfig(tabId, pageType) {
   for (const view of pageType.views.filter((v) => v.activate?.kind === 'link')) {
     let href = null;
     try {
-      const found = await chrome.scripting.executeScript({ target: { tabId, allFrames: true }, func: (spec) => window.__crmRuntime?.activatorHref(spec) ?? null, args: [view.activate] });
+      const found = await execScript({ target: { tabId, allFrames: true }, func: (spec) => window.__crmRuntime?.activatorHref(spec) ?? null, args: [view.activate] });
       href = found.map((r) => r.result).find(Boolean) ?? null;
     } catch {
       href = null;
@@ -1632,7 +1665,7 @@ async function extractWithConfig(tabId, pageType) {
       continue;
     }
     await navigateTab(tabId, href);
-    await chrome.scripting.executeScript({ target: { tabId, allFrames: true }, func: () => window.__crmRuntime?.waitQuiet({ quietMs: 1000, timeoutMs: 15000 }) }).catch(() => {});
+    await execScript({ target: { tabId, allFrames: true }, func: () => window.__crmRuntime?.waitQuiet({ quietMs: 1000, timeoutMs: 15000 }) }).catch(() => {});
     const part = await runInPage(tabId, { ...pageType, frame: null, views: [{ ...view, activate: null }] });
     if (!part) result.errors.push({ view: view.name, error: 'tab_page_unreadable' });
     else {

@@ -3,6 +3,8 @@
 // in-page runtime only marks it (data-cm-follow, see press() in
 // content/crm-runtime.js). This clicks it from the page's own world.
 
+import { execScript } from './exec.js';
+
 // Runs in the page's world: clicks the marked link, if any (open shadow roots included).
 function clickMarkedLink() {
   const find = (root) => {
@@ -24,7 +26,7 @@ function clickMarkedLink() {
 // Follows a marked link in any frame of the tab and waits for the page load
 // it may start (a postback). Whether there was one.
 export async function followScriptLinks(tabId) {
-  const results = await chrome.scripting.executeScript({ target: { tabId, allFrames: true }, world: 'MAIN', func: clickMarkedLink }).catch(() => []);
+  const results = await execScript({ target: { tabId, allFrames: true }, world: 'MAIN', func: clickMarkedLink }, { timeoutMs: 30_000 }).catch(() => []);
   if (!results.some((r) => r.result)) return false;
   await new Promise((resolve) => setTimeout(resolve, 300));
   if ((await chrome.tabs.get(tabId)).status === 'loading') {

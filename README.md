@@ -132,6 +132,10 @@ A grid that reads only a few rows with most columns empty (a search-criteria for
 
 Every run also saves its whole log as `capture_log_<crm>_<date>_<time>.txt` in the same folder.
 
+## When a page does not answer
+
+Every call the extension makes into a CRM page has a time limit (90 seconds; 20 minutes for reading a large grid), because a page that shows a script dialog (an alert, a confirm) or never finishes loading would otherwise never answer, and the run would sit there for good. A call that runs out of time fails its step, the log says so, and the run goes on. **Cancel** ends a waiting call at once. A CRM's own address (`directUrl`) is given about 20 seconds to show the application before the run turns to the launcher.
+
 ## Limits
 
 - Caps per run: 200 pages per list, 5,000 records, 15 message pages per record; the log keeps the last 4,000 lines (the CSV holds everything).
