@@ -2,20 +2,19 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <title>Lead Capture – capture window</title>
-    <link rel="stylesheet" href="../popup/popup.css" />
+    <title>CRM Capture</title>
+    <link rel="stylesheet" href="base.css" />
     <link rel="stylesheet" href="console.css" />
   </head>
   <body>
     <main class="console">
       <header class="console-head">
         <div>
-          <h1>Lead Capture</h1>
-          <p class="muted">This window stays open while a CRM is mapped or captured. The CRM pages being read load in the tab next to this one.</p>
-          <p id="health" class="muted"></p>
+          <h1>CRM Capture</h1>
+          <p class="muted">Pick a CRM and capture every record it has. The CRM pages being read load in the tab next to this one; every value read is written to the log below and saved to today's CSV files.</p>
         </div>
         <div class="row">
-          <select id="crm-select" title="A mapped CRM"></select>
+          <select id="crm-select" title="A CRM with a bundled layout"></select>
           <button id="capture-crm" type="button" class="primary">Capture whole CRM</button>
           <button id="open-settings" type="button">Settings</button>
         </div>
@@ -27,7 +26,6 @@
           <p id="site-text" class="muted">Open a CRM in another tab; this window follows the tab you are using.</p>
         </div>
         <div class="row">
-          <button id="site-map" type="button" hidden>Map this CRM</button>
           <button id="site-capture" type="button" class="primary" hidden>Capture whole CRM</button>
         </div>
       </section>
@@ -40,7 +38,6 @@
         <div class="map-bar"><div id="now-bar" class="map-bar-fill"></div></div>
         <p id="now-phase" class="phase"></p>
         <div id="now-counts" class="counts"></div>
-        <ol id="map-stages" class="map-stages" hidden></ol>
         <div class="row">
           <button id="cancel" type="button" hidden>Cancel</button>
           <button id="clear" type="button" hidden>Done</button>
@@ -64,18 +61,18 @@
             <button id="open-folder" type="button">Open Downloads folder</button>
             <button id="retry" type="button" hidden>Write CSV again</button>
           </div>
-          <h2 class="log-title">Log</h2>
-          <pre id="log" class="map-log console-log"></pre>
         </section>
       </div>
 
       <section class="card">
-        <h2>Map a CRM</h2>
-        <p class="muted">Sign in to the CRM in this browser first, then paste the address of its contacts or leads list (any page of it works).</p>
-        <div class="row">
-          <input id="map-url" type="url" placeholder="https://crm.example.com/contacts" />
-          <button id="map-crm" type="button">Map this CRM</button>
+        <div class="now-head">
+          <h2>Log — every value read</h2>
+          <div class="row">
+            <label class="muted"><input id="follow" type="checkbox" checked /> follow</label>
+            <button id="save-log" type="button">Save log</button>
+          </div>
         </div>
+        <pre id="log" class="map-log console-log console-log-tall"></pre>
       </section>
     </main>
     <script type="module" src="console.js"></script>

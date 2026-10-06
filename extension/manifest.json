@@ -1,12 +1,11 @@
 {
   "manifest_version": 3,
-  "name": "Spyne Lead Capture",
-  "version": "0.11.1",
-  "description": "Capture customer details from dealer CRM pages into a daily CSV file.",
+  "name": "Spyne CRM Capture",
+  "version": "1.0.0",
+  "description": "Capture every record of a mapped CRM into daily CSV files.",
   "minimum_chrome_version": "121",
   "action": {
-    "default_title": "Capture lead from this page",
-    "default_popup": "popup/popup.html",
+    "default_title": "Open the capture window",
     "default_icon": {
       "16": "icons/icon16.png",
       "32": "icons/icon32.png",
@@ -26,23 +25,13 @@
   },
   "options_page": "options/options.html",
   "permissions": [
-    "activeTab",
     "scripting",
     "storage",
     "unlimitedStorage",
     "downloads",
-    "webNavigation",
-    "alarms"
+    "webNavigation"
   ],
   "host_permissions": [
     "<all_urls>"
-  ],
-  "commands": {
-    "_execute_action": {
-      "suggested_key": {
-        "default": "Alt+Shift+S"
-      },
-      "description": "Capture lead from this page"
-    }
-  }
+  ]
 }

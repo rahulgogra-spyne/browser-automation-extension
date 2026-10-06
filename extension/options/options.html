@@ -2,35 +2,15 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <title>Lead Capture settings</title>
-    <link rel="stylesheet" href="../popup/popup.css" />
+    <title>CRM Capture settings</title>
+    <link rel="stylesheet" href="../console/base.css" />
     <link rel="stylesheet" href="options.css" />
   </head>
   <body>
     <main class="page">
-      <h1>Lead Capture settings</h1>
+      <h1>CRM Capture settings</h1>
 
       <form id="settings-form" class="stack">
-        <div class="field">
-          <label for="backendUrl">Extraction server URL</label>
-          <input id="backendUrl" name="backendUrl" type="url" required />
-        </div>
-        <div class="field">
-          <label for="apiKey">Server API key</label>
-          <input id="apiKey" name="apiKey" type="password" autocomplete="off" />
-          <small>Must match EXTENSION_API_KEY on the server. Leave empty if the server has none set.</small>
-        </div>
-        <div class="field">
-          <label>What to capture</label>
-          <div id="captureTargets" class="checks"></div>
-          <small>
-            The kinds of data the mapping agent looks for in a CRM, whatever the vendor. Each kind found is mapped once, captured
-            straight away during that first mapping, and saved to its own daily file (<code>…_users_…</code>,
-            <code>…_customers_…</code>, <code>…_deals_…</code>…), next to <code>…_messages_…</code> (texts, emails, calls, notes)
-            and <code>…_reference_…</code> (every lead source, status, role, salesperson… the CRM uses). A CRM keeps the kinds it
-            was mapped for; change this and map it again to switch.
-          </small>
-        </div>
         <div class="field">
           <label for="capturedBy">Your name</label>
           <input id="capturedBy" name="capturedBy" />
@@ -60,20 +40,15 @@
 
       <h2>CRM layouts</h2>
       <p class="muted">
-        The mapping agent learns where each CRM keeps names, phones, emails and message history, so captures on those CRMs
-        need no AI. Open a CRM you're signed in to and use <b>Map this CRM</b> in the popup: the exploring happens in this
-        browser with your session. Layouts are re-mapped daily and whenever a saved layout stops fitting a page.
+        The layouts ship with the extension in <code>config/crm-structures.json</code>: one entry per CRM, with where its lists,
+        records, tabs and message lists are. To add or change a CRM, edit that file and reload the extension.
       </p>
       <table id="crms">
         <thead>
-          <tr><th>CRM</th><th>Captures</th><th>Layout</th><th>Mapped</th><th></th></tr>
+          <tr><th>CRM</th><th>Hosts</th><th>Captures</th><th>Layout</th></tr>
         </thead>
         <tbody></tbody>
       </table>
-      <p id="crms-msg" class="status"></p>
-      <div class="row">
-        <button id="refresh-crms" type="button">Refresh</button>
-      </div>
 
       <h2>Saved days</h2>
       <p class="muted">Each day's captures are kept in the extension. Rewrite a file here if it was deleted or couldn't be written.</p>

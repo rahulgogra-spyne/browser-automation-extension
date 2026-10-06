@@ -156,3 +156,15 @@ select {
 .site-card p {
   margin: 0;
 }
+
+.console-log-tall {
+  max-height: 60vh;
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+td.partial {
+  color: #8a5d00;
+}

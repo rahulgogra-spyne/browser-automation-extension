@@ -6,7 +6,7 @@ import { normalizeFields } from './normalize.js';
 import { buildRecordId } from './records.js';
 import { buildMessageRows, countEntries } from './messages.js';
 import { detectSite } from './site.js';
-import { rowTitle } from './mapper/datasets.js';
+import { rowTitle } from './datasets.js';
 
 // records: [{ fields: { key: value }, unverified: [key], collections: { list: [entry] } }]
 // meta: { pageUrl, pageTitle, site (CRM name when known), recordId (CRM's id) }

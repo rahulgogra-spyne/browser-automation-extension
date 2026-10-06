@@ -1,16 +1,10 @@
-// Service worker: reads the page, stores rows and rewrites the day's CSVs.
-// The popup and options pages talk to it with chrome.runtime.sendMessage.
+// Service worker: "Capture whole CRM" and nothing else.
 //
-// Reading a page:
-//   1. If the CRM structure config (built by the backend's mapping agent) has
-//      this CRM and page type, follow its rules in the page: click each tab
-//      or expander, read fields and message lists, open each message's own
-//      page for its body. No AI involved.
-//   2. On a mapped list of people, offer to capture every record it links to
-//      (each is opened in a background tab and read the same way).
-//   3. If the rules no longer fit (missing fields, tab gone), report the page
-//      so the agent re-maps it, and use AI extraction this time.
-//   4. Pages the config doesn't know use AI extraction.
+// The CRM layouts (where each field, tab, panel and message list lives) are
+// bundled in config/crm-structures.json. A capture walks every mapped list
+// of the CRM page after page, opens each record in a work tab, reads it with
+// the saved rules (no AI, no server), logs every value it read and saves the
+// rows to today's CSV files as it goes.
 import { STANDARD_KEYS } from './lib/columns.js';
 import { getSettings } from './lib/settings.js';
 import { upsertRows, addMessages, listDays, getDay } from './lib/store.js';
@@ -22,46 +16,65 @@ import { findCrm, findPageType, assessExtraction, describeProblems, urlKey } fro
 import { localDateKey, localTimestamp } from './lib/dates.js';
 import { detectSite } from './lib/site.js';
 import { writeCsvFile } from './lib/sinks/local-downloads.js';
-import { mapCrm as runMapper, explore, mapListType, listPagesAmong, hostAllowed, UNSAFE_LINK, UNSAFE_CLICK } from './lib/mapper/agent.js';
 import { nextPageUrl, isPagedUrl } from './lib/paging.js';
-import { chromeAdapter } from './lib/mapper/chrome-adapter.js';
 import { followScriptLinks } from './lib/follow-links.js';
 import { adoptOpenedTab } from './lib/opened-tabs.js';
-import { remoteLLM, remoteStore } from './lib/mapper/remote.js';
-import { DATASETS, OTHER_DATASET, datasetById, datasetsFrom, datasetOfPageType, datasetsOfCrm, rowTitle } from './lib/mapper/datasets.js';
+import { DATASETS, OTHER_DATASET, datasetById, datasetOfPageType, datasetsOfCrm, rowTitle } from './lib/datasets.js';
 import { referenceRows, REFERENCE_COLUMNS } from './lib/reference.js';
 
-const CONFIG_MAX_AGE_MS = 10 * 60_000;
-const MAX_LIST_CAPTURE = 50;
 const MAX_MESSAGE_PAGES = 15; // per record, when messages have pages of their own
+const MAX_PAGES_PER_LIST = 200;
+const MAX_RECORDS_PER_RUN = 5000;
+const MAX_LOG_LINES = 4000; // the log holds every value read; the CSV holds all of it anyway
+const LOG_VALUE_CHARS = 300; // long bodies are cut in the log, never in the CSV
+
+// ------------------------------------------------------------- the layouts
+
+// The bundled CRM structure config: one entry per CRM, with its page types.
+let configPromise = null;
+function getCrmConfig() {
+  configPromise ??= fetch(chrome.runtime.getURL('config/crm-structures.json'))
+    .then((r) => r.json())
+    .catch((error) => {
+      configPromise = null;
+      throw new Error(`The bundled CRM layouts could not be read: ${error.message}`);
+    });
+  return configPromise;
+}
+
+const listCrms = async () => {
+  const config = await getCrmConfig();
+  return Object.entries(config.crms ?? {})
+    .filter(([, c]) => (c.pageTypes ?? []).length)
+    .map(([id, c]) => ({ id, name: c.name, version: c.version, hosts: c.match?.hosts ?? [], datasets: datasetsOfCrm(c), lists: c.pageTypes.filter((pt) => pt.role === 'list' || pt.role === 'screen').length }));
+};
+
+// ------------------------------------------------------------- messaging
 
 const handlers = {
-  extract,
-  captureList,
-  // A mapping the user asks for also captures: each kind of data is read and
-  // saved as soon as its layout is ready, while the next kind is being mapped.
-  mapCrm: (message) => mapFromBrowser({ ...message, fromUser: true, capture: message.capture !== false }),
-  openConsole: async () => ({ windowId: await ensureConsoleWindow() }),
-  // Proof of concept: every page of the site, everything on it, no layout and no AI.
-  crawlSite,
-  // Finished jobs are cleared so the UIs return to idle (running ones stay).
-  clearJobs: async () => {
-    const { bulk, mapping } = await chrome.storage.session.get(['bulk', 'mapping']);
-    const remove = [];
-    if (bulk && bulk.status !== 'running') remove.push('bulk');
-    if (mapping && mapping.status !== 'running') remove.push('mapping');
-    if (remove.length) await chrome.storage.session.remove(remove);
-    return { cleared: remove };
+  captureCrm,
+  cancelCapture: async () => {
+    cancelRequested = true;
+    return {};
   },
+  bulkStatus: async () => {
+    const { bulk } = await chrome.storage.session.get('bulk');
+    return { bulk: bulk ?? null };
+  },
+  // A finished job is cleared so the capture window returns to idle.
+  clearJobs: async () => {
+    const { bulk } = await chrome.storage.session.get('bulk');
+    if (bulk && bulk.status !== 'running') await chrome.storage.session.remove('bulk');
+    return {};
+  },
+  listCrms: async () => ({ crms: await listCrms() }),
   // The CRM page the user is working in (the most recently used web tab),
-  // and what the config knows about it, for the capture window.
+  // and what the layouts know about it.
   activeSite: async () => {
-    const settings = await getSettings();
     const tabs = (await chrome.tabs.query({})).filter((t) => /^https?:/i.test(t.url || '') && t.url !== CONSOLE_URL);
     const tab = tabs.sort((a, b) => (b.lastAccessed ?? 0) - (a.lastAccessed ?? 0))[0];
     if (!tab) return { site: null };
-    const config = await getCrmConfig(settings);
-    const crm = config && findCrm(config, tab.url);
+    const crm = findCrm(await getCrmConfig(), tab.url);
     const page = crm && findPageType(crm.crm, tab.url);
     return {
       site: {
@@ -76,42 +89,10 @@ const handlers = {
       },
     };
   },
-  health: async () => {
-    const settings = await getSettings();
-    const base = settings.backendUrl.replace(/\/+$/, '');
-    try {
-      const res = await fetch(`${base}/health`, { signal: AbortSignal.timeout(4000) });
-      const data = await res.json();
-      // The mapping endpoints exist on current servers only.
-      const probe = await fetch(`${base}/api/mapper/status`, { headers: { 'x-api-key': settings.apiKey }, signal: AbortSignal.timeout(4000) });
-      return { backend: base, ok: res.ok, model: data.model, keyOk: probe.status !== 401, current: probe.status !== 404 };
-    } catch (error) {
-      return { backend: base, ok: false, error: error.message };
-    }
-  },
-  captureCrm,
-  cancelCapture: async () => {
-    cancelRequested = true;
-    return {};
-  },
-  bulkStatus: async () => {
-    const { bulk } = await chrome.storage.session.get('bulk');
-    return { bulk: bulk ?? null };
-  },
-  mapStatus: async () => {
-    const { mapping } = await chrome.storage.session.get('mapping');
-    return { mapping: mapping ?? null };
-  },
-  save,
+  openConsole: async () => ({ windowId: await ensureConsoleWindow() }),
   writeDay,
   status,
   listDays: async () => ({ days: await listDays() }),
-  crmStatus: async () => backend(await getSettings(), 'GET', '/api/mapper/status'),
-  crmRemap: async ({ crmId }) => backend(await getSettings(), 'POST', '/api/mapper/run', { crmId }),
-  refreshCrmConfig: async () => {
-    const config = await getCrmConfig(await getSettings(), { force: true });
-    return { crms: Object.entries(config?.crms ?? {}).map(([id, c]) => ({ id, name: c.name, version: c.version })) };
-  },
 };
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
@@ -124,6 +105,9 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   return true; // keep the channel open for the async response
 });
 
+// The toolbar icon opens the capture window.
+chrome.action.onClicked.addListener(() => ensureConsoleWindow().catch(() => {}));
+
 // Row updates and file rewrites run one at a time so two quick saves can't
 // interleave their read-modify-write.
 let queue = Promise.resolve();
@@ -134,99 +118,10 @@ function serialized(task) {
 }
 
 const humanize = (key) => key.replace(/_/g, ' ').replace(/^\w/, (c) => c.toUpperCase());
-// Extension messaging hands objects back with sorted keys; show names and
-// contact details first instead of alphabetical order.
+// Show names and contact details first instead of alphabetical order.
 const KEY_ORDER = new Map(STANDARD_KEYS.map((key, i) => [key, i]));
 const byStandardOrder = (a, b) => (KEY_ORDER.get(a.key) ?? KEY_ORDER.size) - (KEY_ORDER.get(b.key) ?? KEY_ORDER.size);
 const nonEmpty = (collections = {}) => Object.fromEntries(Object.entries(collections).filter(([, list]) => list.length));
-
-// ------------------------------------------------------------------ reading
-
-async function extract({ tabId }) {
-  const tab = await chrome.tabs.get(tabId);
-  if (!/^https?:/i.test(tab.url || '')) {
-    throw new Error("This page can't be read (browser pages and local files are off-limits).");
-  }
-  const settings = await getSettings();
-  const site = detectSite(tab.url);
-  const config = await getCrmConfig(settings);
-  const crm = config && findCrm(config, tab.url);
-  let page = crm && findPageType(crm.crm, tab.url);
-  // A page of a mapped CRM that isn't a record itself (a dashboard, search
-  // results, a related list): offer the records it links to.
-  if (crm && (!page || page.pageType.role === 'message')) {
-    const linked = await linkedRecords(tab, crm.crm);
-    page = linked ? { pageType: { role: 'linked' }, recordId: '', linked } : null;
-  }
-  if (!page) {
-    const ai = await aiExtract(tab, settings); // carries the dataset the AI named
-    // A CRM mapped as screens (it navigates by clicks) has no page to match
-    // by address: AI reads what is on screen, and its whole capture is offered.
-    const screens = crm?.crm.pageTypes?.filter((pt) => pt.role === 'screen') ?? [];
-    if (screens.length) return { ...ai, site: crm.crm.name, mode: 'ai', mapped: true, crmId: crm.id, configVersion: crm.crm.version, lists: screens.map((pt) => ({ id: pt.id, entity: pt.entity })) };
-    return { ...ai, site, mode: 'ai' };
-  }
-
-  const about = {
-    site: crm.crm.name,
-    crmId: crm.id,
-    configVersion: crm.crm.version,
-    recordId: page.recordId,
-    lists: crm.crm.pageTypes.filter((pt) => pt.role === 'list').map((pt) => ({ id: pt.id, entity: pt.entity })),
-  };
-  if (page.pageType.role === 'list') return { ...about, ...(await readList(tab, crm.crm, page.pageType)) };
-  if (page.pageType.role === 'linked') return { ...about, ...page.linked };
-
-  await setProgress({ phase: 'Reading the record' });
-  let result;
-  try {
-    // Tabs that are pages of their own are read in a work tab, so the user's
-    // tab never navigates away from the record.
-    result = hasLinkViews(page.pageType)
-      ? await withBackgroundTab(tab.url, (t) => captureRecord(t.id, crm.crm, page.pageType))
-      : await captureRecord(tabId, crm.crm, page.pageType);
-  } finally {
-    await setProgress(null);
-    if (!bulkInProgress && !mappingInProgress) await endJob();
-  }
-  const verdict = assessExtraction(page.pageType, result);
-  const dataset = datasetOfPageType(page.pageType, crm.crm);
-  if (verdict.ok) {
-    const record = toRecord(result);
-    // Read by rules (no AI): saved straight away; the popup just confirms.
-    const saved = await autoSave([record], { pageUrl: tab.url, pageTitle: tab.title || '', site: crm.crm.name, recordId: page.recordId, dataset });
-    return { ...about, dataset, mode: 'config', pageType: page.pageType.description || 'Record', records: [record], saved };
-  }
-
-  const problems = describeProblems(verdict);
-  const queued = await reportFailure(settings, {
-    crmId: crm.id,
-    pageTypeId: page.pageType.id,
-    url: tab.url,
-    missing: [...verdict.missing, ...verdict.invalid.map((k) => `${k} (invalid)`)],
-    errors: verdict.errors,
-  });
-  const ai = await aiExtract(tab, settings);
-  // Keep the message lists the mapped rules could still read.
-  if (result && ai.records[0]) ai.records[0].collections = nonEmpty(result.collections);
-  return {
-    ...ai,
-    ...about,
-    dataset, // the page's mapped kind, whatever the AI called it
-    mode: 'ai-fallback',
-    notice: `The saved ${crm.crm.name} layout didn't fit this page (${problems}). ${queued ? 'Re-mapping it now; ' : ''}AI read the page this time.`,
-  };
-}
-
-// Saves records read by rules without a review step; returns what save() reports.
-async function autoSave(records, meta) {
-  const payload = records.map((r) => ({ fields: Object.fromEntries(r.fields.map((f) => [f.key, f.value])), collections: r.collections, pageUrl: r.pageUrl, recordId: r.recordId, dataset: r.dataset }));
-  try {
-    return await save({ records: payload, meta });
-  } catch (error) {
-    return { error: error.message };
-  }
-}
 
 const toRecord = (result) => ({
   fields: Object.entries(result.fields)
@@ -243,129 +138,49 @@ const matchesType = (pageType, url) => {
   }
 };
 
-// A mapped list of people: which records it links to, so the popup can
-// offer to capture them all.
-async function readList(tab, crm, pageType) {
-  await inject(tab.id, ['content/crm-runtime.js']);
-  const results = await chrome.scripting.executeScript({
-    target: { tabId: tab.id, allFrames: true },
-    func: (spec) => window.__crmRuntime?.readCollection(spec) ?? [],
-    args: [pageType.items],
-  });
-  const entries = results.map((r) => r.result).find((list) => list?.length) ?? [];
-  const recordType = crm.pageTypes.find((pt) => pt.id === pageType.recordPageType);
-  const items = entries.filter((e) => e.link && recordType && matchesType(recordType, e.link)).map((e) => ({ url: e.link, title: e.title || e.link }));
-  return { mode: 'list', entity: pageType.entity || 'record', recordPageType: pageType.recordPageType, count: items.length, items: items.slice(0, MAX_LIST_CAPTURE) };
-}
-
-// Links on this page that lead to mapped records: the same shape as readList,
-// so the popup can offer to capture them all. Null when there are none.
-async function linkedRecords(tab, crm) {
-  const recordTypes = crm.pageTypes.filter((pt) => pt.role === 'record' && pt.validation?.ok !== false);
-  if (!recordTypes.length) return null;
-  await inject(tab.id, ['content/crm-runtime.js']);
-  let results;
-  try {
-    results = await chrome.scripting.executeScript({
-      target: { tabId: tab.id, allFrames: true },
-      func: () => {
-        const rt = window.__crmRuntime;
-        if (!rt) return [];
-        rt.snapshot();
-        return rt.pageLinks().map(({ url, text }) => ({ url, text }));
-      },
-    });
-  } catch {
-    return null;
-  }
-  const links = results.flatMap((r) => r.result ?? []);
-  let best = null;
-  for (const recordType of recordTypes) {
-    const seen = new Map();
-    for (const link of links) {
-      const match = matchesType(recordType, link.url);
-      if (!match) continue;
-      const id = match[1] || link.url;
-      if (!seen.has(id) || (!seen.get(id).title && link.text)) seen.set(id, { url: link.url, title: link.text || link.url });
-    }
-    if (seen.size && (!best || seen.size > best.items.length)) best = { recordType, items: [...seen.values()] };
-  }
-  if (!best) return null;
-  return {
-    mode: 'list',
-    source: 'links',
-    entity: best.recordType.entity || 'record',
-    recordPageType: best.recordType.id,
-    count: best.items.length,
-    items: best.items.slice(0, MAX_LIST_CAPTURE),
-  };
-}
-
-// Opens every record of a mapped list in a background tab, one at a time,
-// and reads each with the saved layout. urls come from readList.
-async function captureList({ crmId, recordPageType, urls = [] }) {
-  await ensureConsoleWindow();
-  const settings = await getSettings();
-  const config = await getCrmConfig(settings);
-  const crm = config?.crms?.[crmId];
-  const pageType = crm?.pageTypes.find((pt) => pt.id === recordPageType);
-  if (!pageType) throw new Error('The saved layout for these records is gone. Re-scan the page.');
-  const records = [];
-  const failed = [];
-  const list = urls.slice(0, MAX_LIST_CAPTURE);
-  const keepAlive = setInterval(() => chrome.runtime.getPlatformInfo(), 20_000);
-  try {
-    for (const [i, url] of list.entries()) {
-      await setProgress({ phase: `Capturing ${i + 1} of ${list.length}`, done: i, total: list.length });
-      try {
-        const result = await withBackgroundTab(url, (tab) => captureRecord(tab.id, crm, pageType));
-        const verdict = assessExtraction(pageType, result);
-        if (!verdict.ok) {
-          failed.push({ url, problems: describeProblems(verdict) });
-          continue;
-        }
-        records.push({ ...toRecord(result), pageUrl: url, recordId: matchesType(pageType, url)?.[1] ?? '' });
-      } catch (error) {
-        failed.push({ url, problems: error.message });
-      }
-    }
-  } finally {
-    clearInterval(keepAlive);
-    await setProgress(null);
-  }
-  await endJob();
-  if (failed.length && !records.length) {
-    await reportFailure(settings, { crmId, pageTypeId: pageType.id, url: failed[0].url, missing: [], errors: [{ view: 'page', error: failed[0].problems }] });
-  }
-  const dataset = datasetOfPageType(pageType, crm);
-  const saved = records.length ? await autoSave(records, { pageUrl: urls[0], pageTitle: '', site: crm.name, dataset }) : null;
-  return { mode: 'config', site: crm.name, crmId, configVersion: crm.version, dataset, pageType: `${records.length} ${dataset} from the list`, records, failed, saved };
-}
-
 // ------------------------------------------------- the whole CRM
 
-const MAX_PAGES_PER_LIST = 200;
-const MAX_RECORDS_PER_RUN = 5000;
 let bulkInProgress = null;
 let cancelRequested = false;
 
-const setBulk = (patch) =>
-  chrome.storage.session.get('bulk').then(({ bulk }) => chrome.storage.session.set({ bulk: { ...(bulk ?? {}), ...patch } }));
-
-// One capture run: a whole-CRM capture, or the capture that accompanies a
-// first mapping (layouts arrive one kind at a time while the agent is still
-// mapping the next). Its stats are what the popup and the capture window show.
-function startRun({ crmId, name, phase, withMapping = false }) {
+// One capture run; its stats are what the capture window shows.
+function startRun({ crmId, name, phase }) {
   const stats = {
-    status: 'running', crmId, name, startedAt: Date.now(), withMapping,
-    lists: 0, pages: 0, found: 0, total: 0, captured: 0, failed: 0, aiFallbacks: 0, remapped: 0, saved: 0, messages: 0,
+    status: 'running', crmId, name, startedAt: Date.now(),
+    lists: 0, pages: 0, found: 0, total: 0, captured: 0, partial: 0, failed: 0, saved: 0, messages: 0,
     byKind: {}, files: [], phase, log: [], recent: [],
   };
   const note = (line) => {
     stats.log.push(`${new Date().toLocaleTimeString()}  ${line}`);
-    if (stats.log.length > 80) stats.log.shift();
+    if (stats.log.length > MAX_LOG_LINES) stats.log.splice(0, stats.log.length - MAX_LOG_LINES);
   };
-  return { stats, note, seen: new Set(), pending: [], healed: false, publish: () => chrome.storage.session.set({ bulk: stats }) };
+  // Data lines sit under the record's line, indented, with no time stamp.
+  const data = (lines) => {
+    for (const line of lines) stats.log.push(`            ${line}`);
+    if (stats.log.length > MAX_LOG_LINES) stats.log.splice(0, stats.log.length - MAX_LOG_LINES);
+  };
+  return { stats, note, data, seen: new Set(), pending: [], publish: () => chrome.storage.session.set({ bulk: stats }) };
+}
+
+const cut = (value) => {
+  const s = String(value ?? '').replace(/\s+/g, ' ').trim();
+  return s.length > LOG_VALUE_CHARS ? `${s.slice(0, LOG_VALUE_CHARS)}…` : s;
+};
+
+// Every value read from a record, one line each, then every message.
+// fields: { key: value } or [{ key, value }]; collections: { list: [entry] }.
+function describeRecord(fields, collections = {}) {
+  const pairs = Array.isArray(fields) ? fields.map((f) => [f.key, f.value]) : Object.entries(fields);
+  const lines = pairs.filter(([, v]) => String(v ?? '').trim()).map(([k, v]) => `${k}: ${cut(v)}`);
+  for (const [list, entries] of Object.entries(collections)) {
+    entries.forEach((entry, i) => {
+      const head = [entry.channel, entry.timestamp || entry.date || entry.time, entry.direction, entry.sender || entry.from || entry.author].filter(Boolean).join(' · ');
+      const subject = entry.subject || entry.title || '';
+      const body = entry.body || entry.text || entry.message || entry.note || entry.content || '';
+      lines.push(`[${list.replace(/_/g, ' ')} ${i + 1}] ${head}${subject ? ` — ${cut(subject)}` : ''}${body ? ` — ${cut(body)}` : ''}`);
+    });
+  }
+  return lines;
 }
 
 async function flushRun(run, ctx) {
@@ -376,6 +191,7 @@ async function flushRun(run, ctx) {
   run.stats.saved += batch.length;
   run.stats.messages = result.messages;
   run.stats.files = [...new Set([...run.stats.files, ...(result.files ?? [])])];
+  run.note(`Saved ${batch.length} record(s) → ${(result.files ?? []).join(', ')}${result.fileError ? ` (${result.fileError})` : ''}`);
   if (result.fileError) run.stats.fileError = result.fileError;
 }
 
@@ -391,13 +207,51 @@ async function finishRun(run, ctx, error = null) {
   stats.phase = '';
   stats.finishedAt = Date.now();
   const kinds = Object.entries(stats.byKind).map(([kind, n]) => `${n} ${kind}`).join(', ');
-  run.note(error ? `Failed: ${error.message}` : `${stats.status}: ${stats.captured} captured (${kinds || 'nothing'}), ${stats.saved} saved`);
+  run.note(error ? `Failed: ${error.message}` : `${stats.status}: ${stats.captured} captured (${kinds || 'nothing'}), ${stats.saved} saved, ${stats.messages} messages`);
   await run.publish();
   return stats;
 }
 
-// ctx: { crmId, crm (its pageTypes may grow while a mapping runs), settings,
-// heal (re-map a layout that stops fitting) }.
+// Every record behind every mapped list of a CRM, page after page, each read
+// with the saved layout and saved to the day's files as it goes. Runs in the
+// background; the capture window follows it through bulkStatus and can
+// cancel it. startUrl: the page the user is on (a list to start from).
+async function captureCrm({ crmId, startUrl = null }) {
+  if (bulkInProgress) throw new Error(`Already capturing ${bulkInProgress}. Wait for it or cancel it.`);
+  const settings = await getSettings();
+  const config = await getCrmConfig();
+  const crm = config.crms?.[crmId];
+  if (!crm) throw new Error('No layout is bundled for this CRM.');
+  const recordTypes = crm.pageTypes.filter((pt) => pt.role === 'record');
+  const screens = crm.pageTypes.filter((pt) => pt.role === 'screen' && pt.validation?.ok !== false);
+  if (!recordTypes.length && !screens.length) throw new Error('No layout is mapped for this CRM.');
+  let lists = crm.pageTypes.filter((pt) => pt.role === 'list');
+  // No list mapped: walk from the page the user is on, page after page,
+  // taking every link into a mapped record (its items are found by shape).
+  if (!lists.length && !screens.length && startUrl && recordTypes.length) lists = [{ id: 'current_page', entity: recordTypes[0].entity, recordPageType: recordTypes[0].id, items: null, samples: [startUrl] }];
+  if (!lists.length && !screens.length) throw new Error('No list is mapped for this CRM. Open one of its lists (users, contacts, leads…) and capture from there.');
+  bulkInProgress = crm.name;
+  cancelRequested = false;
+  await ensureConsoleWindow();
+  const run = startRun({ crmId, name: crm.name, phase: 'Collecting records…' });
+  run.note(`Capturing ${crm.name} with layout v${crm.version}: ${lists.length} list(s), ${screens.length} screen(s)`);
+  await run.publish();
+  const keepAlive = setInterval(() => chrome.runtime.getPlatformInfo(), 20_000);
+  const ctx = { crmId, crm, settings };
+  try {
+    if (lists.length) await captureLists(run, ctx, lists, { startUrl });
+    if (screens.length) await captureScreens(run, ctx, screens);
+    return await finishRun(run, ctx);
+  } catch (error) {
+    await finishRun(run, ctx, error);
+    throw error;
+  } finally {
+    clearInterval(keepAlive);
+    bulkInProgress = null;
+    await endJob();
+  }
+}
+
 // Walks each list page after page and captures every record it links to.
 async function captureLists(run, ctx, lists, { startUrl = null } = {}) {
   const { stats, note, seen } = run;
@@ -430,7 +284,7 @@ async function captureLists(run, ctx, lists, { startUrl = null } = {}) {
       listSeen.add(url);
       stats.pages++;
       stats.phase = `Reading the ${list.entity || 'record'} list (${kind}), page ${pageNo + 1}: ${queue.length} found`;
-      note(stats.phase);
+      note(`${stats.phase} — ${url}`);
       await run.publish();
       const page = await withBackgroundTab(url, async (tab) => {
         const paged = isPagedUrl(url);
@@ -510,85 +364,42 @@ async function pressListNext(tabId, near) {
   return true;
 }
 
-// Records known by URL only (a kind whose list page was not found).
-async function captureUrls(run, ctx, recordType, urls) {
-  const items = [];
-  for (const url of urls) {
-    const match = matchesType(recordType, url);
-    const id = `${recordType.id}:${match?.[1] || url}`;
-    if (!match || run.seen.has(id)) continue;
-    run.seen.add(id);
-    items.push({ url, title: '', recordTypeId: recordType.id, recordId: match[1] ?? '' });
-  }
-  run.stats.found += items.length;
-  if (items.length) run.note(`No list of ${datasetOfPageType(recordType, ctx.crm)} was found: capturing the ${items.length} record(s) seen while mapping`);
-  await captureItems(run, ctx, items);
-}
-
-// Reads each record with its layout; saves every few records so nothing is
-// lost. A layout that stops fitting is re-mapped once (AI, from this
-// browser) when ctx.heal allows; records that still fail are read by AI.
+// Reads each record with its layout, logs every value read, and saves every
+// few records so nothing is lost. A record the layout does not fully fit
+// (a missing tab or required field) is still saved with whatever was read.
 async function captureItems(run, ctx, items) {
-  const { stats, note } = run;
+  const { stats, note, data } = run;
   stats.total += items.length;
   for (const item of items) {
     if (cancelRequested) break;
     stats.phase = `Capturing ${stats.captured + stats.failed + 1} of ${stats.total}${item.title ? `: ${item.title}` : ''}`;
     await run.publish();
-    let recordType = ctx.crm.pageTypes.find((pt) => pt.id === item.recordTypeId);
+    const recordType = ctx.crm.pageTypes.find((pt) => pt.id === item.recordTypeId);
     const kind = datasetOfPageType(recordType, ctx.crm);
     try {
-      let result = await withBackgroundTab(item.url, (tab) => captureRecord(tab.id, ctx.crm, recordType));
-      let verdict = assessExtraction(recordType, result);
-      if (!verdict.ok && ctx.heal && !run.healed && !mappingInProgress) {
-        run.healed = true;
-        stats.phase = `The saved layout didn't fit ${item.title || 'a record'} (${describeProblems(verdict)}); re-mapping it…`;
-        note(stats.phase);
-        await run.publish();
-        try {
-          await mapFromBrowser({ site: siteOf(ctx.crmId, ctx.crm), onlyUrl: item.url, reason: `whole-CRM capture failed (${describeProblems(verdict)})` });
-          const config = await getCrmConfig(ctx.settings, { force: true });
-          ctx.crm = config?.crms?.[ctx.crmId] ?? ctx.crm;
-          stats.remapped++;
-          recordType = ctx.crm.pageTypes.find((pt) => pt.id === item.recordTypeId) ?? recordType;
-          result = await withBackgroundTab(item.url, (tab) => captureRecord(tab.id, ctx.crm, recordType));
-          verdict = assessExtraction(recordType, result);
-        } catch {
-          // keep going with the old layout and AI
-        }
-      }
-      let record;
-      if (verdict.ok) {
-        record = toRecord(result);
-      } else {
-        const ai = await withBackgroundTab(item.url, (tab) => chrome.tabs.get(tab.id).then((t) => aiExtract(t, ctx.settings)));
-        if (!ai.records[0]) throw new Error('nothing read');
-        record = { fields: ai.records[0].fields, collections: nonEmpty(result?.collections) };
-        stats.aiFallbacks++;
-      }
+      const result = await withBackgroundTab(item.url, (tab) => captureRecord(tab.id, ctx.crm, recordType));
+      const verdict = assessExtraction(recordType, result);
+      if (!result || !Object.keys(result.fields).length) throw new Error(`nothing read (${describeProblems(verdict) || 'no fields'})`);
+      const record = toRecord(result);
       run.pending.push({ fields: Object.fromEntries(record.fields.map((f) => [f.key, f.value])), collections: record.collections, pageUrl: item.url, recordId: item.recordId, dataset: kind });
       stats.captured++;
+      if (!verdict.ok) stats.partial++;
       stats.byKind[kind] = (stats.byKind[kind] ?? 0) + 1;
       const name = rowTitle(record.fields) || item.title || item.url;
       const messages = Object.values(record.collections).reduce((n, l) => n + l.length, 0);
-      stats.recent.unshift({ name, kind, fields: record.fields.length, messages, url: item.url });
+      stats.recent.unshift({ name, kind, fields: record.fields.length, messages, url: item.url, partial: !verdict.ok });
       if (stats.recent.length > 60) stats.recent.pop();
-      note(verdict.ok ? `Captured ${name} (${kind}): ${record.fields.length} fields, ${messages} messages` : `Read ${name} (${kind}) with AI: the rules did not fit (${describeProblems(verdict)})`);
+      note(`Captured ${name} (${kind}): ${record.fields.length} fields, ${messages} messages${verdict.ok ? '' : ` — layout did not fully fit (${describeProblems(verdict)})`} — ${item.url}`);
+      data(describeRecord(record.fields, record.collections));
     } catch (error) {
       stats.failed++;
       note(`Failed ${item.title || item.url}: ${error.message}`);
     }
     if (run.pending.length >= 10) await flushRun(run, ctx);
+    await run.publish();
   }
   await flushRun(run, ctx);
 }
-
-// ----------------------------------------- screens reached by clicking
-//
-// A CRM with one address for everything has no page to open by URL: its
-// lists are "screens" (role 'screen'), each the path of clicks that leads to
-// it from the start page plus the grid found there. Capturing one replays
-// the path in a work tab, reads the grid, presses "next" and reads again.
 
 // Runs func in every frame of the tab; [{ frameId, result }].
 async function inFrames(tabId, func, args = []) {
@@ -721,8 +532,12 @@ async function openRowPage(tabId, screen, index) {
   return after !== before ? after : null;
 }
 
+// Screens of a click-driven CRM (one address for everything): each is the
+// path of clicks that leads to it from the start page plus the grid found
+// there. Capturing one replays the path in a work tab, reads the grid,
+// presses "next" and reads again.
 async function captureScreens(run, ctx, screens) {
-  const { stats, note } = run;
+  const { stats, note, data } = run;
   stats.lists += screens.length;
   for (const screen of screens) {
     if (cancelRequested) break;
@@ -757,19 +572,7 @@ async function captureScreens(run, ctx, screens) {
         for (let pageNo = 0; pageNo < MAX_PAGES_PER_LIST && !cancelRequested; pageNo++) {
           const read = (await inFrames(tab.id, (spec) => window.__crmRuntime?.readTable?.(spec) ?? null, [screen.table])).map((f) => f.result).find((r) => r?.rows?.length);
           if (!read) {
-            if (pageNo === 0) {
-              // The grid's rules read nothing: let AI read what is on screen this once.
-              const ai = await chrome.tabs.get(tab.id).then((t) => aiExtract(t, ctx.settings)).catch(() => null);
-              for (const record of ai?.records ?? []) {
-                run.pending.push({ fields: Object.fromEntries(record.fields.map((f) => [f.key, f.value])), collections: {}, pageUrl: startUrl, dataset: kind });
-                stats.found++;
-                stats.total++;
-                stats.captured++;
-                stats.aiFallbacks++;
-                stats.byKind[kind] = (stats.byKind[kind] ?? 0) + 1;
-              }
-              note(ai?.records?.length ? `"${screen.entity}": the grid's layout did not fit; AI read ${ai.records.length} rows from the screen` : `"${screen.entity}": no rows on screen`);
-            }
+            if (pageNo === 0) note(`"${screen.entity}": no rows on screen (the grid's layout did not fit)`);
             break;
           }
           if (read.signature === lastSignature) break; // "next" changed nothing: the last page
@@ -799,15 +602,19 @@ async function captureScreens(run, ctx, screens) {
               toOpen.push({ index, title: rowTitle(fields) });
               continue;
             }
-            let record = { fields, collections: {} };
+            let record = { fields: normalizeFields(fields), collections: {} };
+            let problem = '';
             if (screen.detail) {
               stats.phase = `Reading "${screen.entity}" (${kind}), page ${pageNo + 1}: opening ${rowTitle(fields) || `row ${index + 1}`}`;
               await run.publish();
               const result = await readRowInPlace(tab.id, ctx.crm, screen, index, previous);
               if (Object.keys(result.fields).length) previous = result.fields;
               const verdict = assessExtraction(screen.detail, result);
-              if (verdict.ok) record = { fields: normalizeFields({ ...fields, ...result.fields }), collections: nonEmpty(result.collections) };
-              else note(`${rowTitle(fields) || `Row ${index + 1}`}: the ${screen.entity} panel didn't fit (${describeProblems(verdict)}); saved the row's columns only`);
+              record = { fields: normalizeFields({ ...fields, ...result.fields }), collections: nonEmpty(result.collections) };
+              if (!verdict.ok) {
+                problem = describeProblems(verdict);
+                stats.partial++;
+              }
             }
             run.pending.push({ fields: record.fields, collections: record.collections, pageUrl: startUrl, dataset: kind });
             taken++;
@@ -815,10 +622,14 @@ async function captureScreens(run, ctx, screens) {
             stats.total++;
             stats.captured++;
             stats.byKind[kind] = (stats.byKind[kind] ?? 0) + 1;
+            const name = rowTitle(record.fields) || `row ${index + 1}`;
             const messages = Object.values(record.collections).reduce((n, l) => n + l.length, 0);
-            stats.recent.unshift({ name: rowTitle(record.fields) || '(row)', kind, fields: Object.keys(record.fields).length, messages, url: startUrl });
+            stats.recent.unshift({ name, kind, fields: Object.keys(record.fields).length, messages, url: startUrl, partial: Boolean(problem) });
             if (stats.recent.length > 60) stats.recent.pop();
+            note(`Captured ${name} (${kind}) from "${screen.entity}" page ${pageNo + 1}: ${Object.keys(record.fields).length} fields, ${messages} messages${problem ? ` — the panel did not fully fit (${problem})` : ''}`);
+            data(describeRecord(record.fields, record.collections));
             if (run.pending.length >= 10) await flushRun(run, ctx);
+            await run.publish();
           }
           // Rows that open their record's page by script: note each address, come back.
           let lost = false;
@@ -862,84 +673,6 @@ async function captureScreens(run, ctx, screens) {
   }
 }
 
-// Every record behind every mapped list of a CRM (or of the lists named in
-// listIds), whatever its kind, page after page, each read with the saved
-// layout and saved to the day's files as it goes. Runs in the background;
-// the popup and the capture window follow it through bulkStatus and can
-// cancel it.
-async function captureCrm({ crmId, listIds = null, startUrl = null }) {
-  if (bulkInProgress) throw new Error(`Already capturing ${bulkInProgress}. Wait for it or cancel it.`);
-  const settings = await getSettings();
-  let config = await getCrmConfig(settings);
-  let crm = config?.crms?.[crmId];
-  if (!crm) throw new Error('This CRM is not mapped.');
-  const recordTypes = crm.pageTypes.filter((pt) => pt.role === 'record');
-  if (!recordTypes.length && !crm.pageTypes.some((pt) => pt.role === 'screen')) throw new Error('No layout is mapped for this CRM yet.');
-  let lists = crm.pageTypes.filter((pt) => pt.role === 'list' && (!listIds || listIds.includes(pt.id)));
-  // Lists of a click-driven CRM: reached by a path of clicks, not by address.
-  const screens = crm.pageTypes.filter((pt) => pt.role === 'screen' && pt.validation?.ok !== false && (!listIds || listIds.includes(pt.id)));
-  bulkInProgress = crm.name;
-  cancelRequested = false;
-  if (!mappingInProgress) await chrome.storage.session.remove('mapping'); // a finished mapping's panel makes way
-  await ensureConsoleWindow();
-  const run = startRun({ crmId, name: crm.name, phase: 'Collecting records…' });
-  await run.publish();
-  const keepAlive = setInterval(() => chrome.runtime.getPlatformInfo(), 20_000);
-  const ctx = { crmId, crm, settings, heal: true };
-  try {
-    // No list was mapped yet: find the CRM's list pages now (no AI needed:
-    // their rows are the pages linking into the mapped record types), learn
-    // them and save them to the layout; then walk them.
-    if (!lists.length && recordTypes.some((rt) => !screens.some((s) => s.recordPageType === rt.id))) {
-      run.stats.phase = 'Looking for the lists in this CRM…';
-      await run.publish();
-      lists = await discoverLists(crmId, crm, startUrl, settings);
-      config = await getCrmConfig(settings, { force: true });
-      ctx.crm = crm = config?.crms?.[crmId] ?? crm;
-    }
-    // Still none: walk from the page the user is on, page after page, taking
-    // every link into a mapped record (its items are found by shape).
-    if (!lists.length && !screens.length && startUrl && recordTypes.length) lists = [{ id: 'current_page', entity: recordTypes[0].entity, recordPageType: recordTypes[0].id, items: null, samples: [startUrl] }];
-    if (!lists.length && !screens.length) throw new Error('No list was found in this CRM. Open one of its lists (users, contacts, leads…) and capture from there.');
-    if (lists.length) await captureLists(run, ctx, lists, { startUrl });
-    if (screens.length) await captureScreens(run, ctx, screens);
-    return await finishRun(run, ctx);
-  } catch (error) {
-    await finishRun(run, ctx, error);
-    throw error;
-  } finally {
-    clearInterval(keepAlive);
-    bulkInProgress = null;
-    await setProgress(null);
-    await endJob();
-  }
-}
-
-// Finds and learns the CRM's list pages without AI: explores from startUrl
-// (and the CRM's own start page), keeps the pages whose rows link into a
-// mapped record type, learns each one's rows, and adds them to the layout.
-async function discoverLists(crmId, crm, startUrl, settings) {
-  const recordTypes = crm.pageTypes.filter((pt) => pt.role === 'record');
-  const site = { ...siteOf(crmId, crm), startUrl: startUrl || crm.startUrl };
-  const adapter = chromeAdapter(site, { windowId: work.windowId });
-  const call = (method, path, body) => backend(settings, method, path, body);
-  const store = remoteStore(call, (opts) => getCrmConfig(settings, opts));
-  const log = (line) => setBulk({ phase: line });
-  const page = await adapter.open(site.startUrl);
-  try {
-    const pages = await explore(adapter, page, site, { maxPages: 18, perPattern: 2, log, datasets: datasetsFrom(datasetsOfCrm(crm)) });
-    const found = [];
-    for (const candidate of listPagesAmong(pages, recordTypes)) {
-      const lt = await mapListType(adapter, page, null, { id: `${candidate.recordType.entity || 'record'}_list${found.length ? `_${found.length + 1}` : ''}`, entity: candidate.recordType.entity, url: candidate.urls?.[0] ?? candidate.url, recordTypes }, { log });
-      if (lt) found.push(lt);
-    }
-    if (found.length) await store.saveMapping(site, found, { reason: 'lists found during a whole-CRM capture', mappedBy: 'extension (no AI)', replaceAll: false });
-    return found;
-  } finally {
-    await adapter.close(page);
-  }
-}
-
 // The saved layout, followed in the page: fields and message lists, plus
 // each message's own page when the layout knows one (an email's body).
 async function captureRecord(tabId, crm, pageType) {
@@ -958,9 +691,7 @@ async function followEntryPages(crm, pageType, result) {
       const messageType = spec.detailPageType && crm.pageTypes.find((pt) => pt.id === spec.detailPageType);
       const entries = (result.collections[name] ?? []).filter((e) => e.link);
       if (!messageType || !entries.length) continue;
-      const toRead = entries.slice(0, MAX_MESSAGE_PAGES);
-      for (const [i, entry] of toRead.entries()) {
-        await setProgress({ phase: `Reading ${name.replace(/_/g, ' ')} ${i + 1} of ${toRead.length}`, done: i, total: toRead.length });
+      for (const entry of entries.slice(0, MAX_MESSAGE_PAGES)) {
         try {
           const detail = await withBackgroundTab(entry.link, (tab) => extractWithConfig(tab.id, messageType));
           // The message's own page is the authority (the list only showed a subject line).
@@ -973,274 +704,9 @@ async function followEntryPages(crm, pageType, result) {
   }
 }
 
-// ------------------------------------- crawl everything (proof of concept)
-//
-// Not the mapped capture: from the page the user is on, it goes through the
-// whole CRM the way a person browsing it would and saves everything each
-// page shows, with no layout, no AI and no filter on the kind of data:
-//   - every link within the CRM's hosts is opened
-//   - safe menus, tabs and cards are clicked; a screen with no address of
-//     its own is reached again by replaying its clicks, and a card that opens
-//     the CRM in a new tab (on a host of its own) continues in the work tab
-//   - every grid row with no link is opened (its drawer or dialog read and
-//     closed again), and grids are paged with their "next" control
-//   - nothing that adds, edits, deletes, sends, exports or signs out is pressed
-// It writes two files as it goes: crawl_values_<date>.csv (one value per
-// line: page, click path, source, table, row, label, value) and
-// crawl_pages_<date>.csv (one line per page or state read, with its text).
-
-const CRAWL = { maxStates: 400, clicksPerPage: 20, rowsPerGrid: 40, pagesPerGrid: 20, maxClickDepth: 6, textChars: 8000 };
-// More than the mapper's guard: a crawl presses many more things.
-const CRAWL_UNSAFE =
-  /^(approve|reject|decline|accept|confirm|assign|reassign|merge|convert|archive|restore|reset|clear|dial|call|e-?mail|text|sms|message|reply|forward|disable|deactivate|activate|enable|mark|complete|book|schedule|cancel|pay|purchase|order|apply|transfer|move|copy|duplicate|share|publish|post|sync|update|upgrade|install|refresh|delete|remove|close)\b/i;
-const PAGER_CAPTION = /^(next|prev|previous|first|last|more|‹|›|«|»|<|>|\d+)$/i;
-// Clicks in these areas (menus, headers) lead to the same place from every page: clicked once.
-const GLOBAL_AREAS = new Set(['nav', 'aside', 'header', 'navigation', 'menu', 'menubar', 'tree']);
-const VALUE_COLUMNS = ['page_url', 'click_path', 'source', 'table', 'row', 'label', 'value'];
-const PAGE_COLUMNS = ['page_url', 'click_path', 'source', 'row', 'title', 'frames', 'fields', 'table_rows', 'text'];
-const hashOf = (s) => {
-  let h = 0;
-  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
-  return String(h);
-};
-const describeStep = (step) => step.label;
-
-async function crawlSite({ startUrl }) {
-  if (bulkInProgress) throw new Error(`Already capturing ${bulkInProgress}. Wait for it or cancel it.`);
-  if (!/^https?:/i.test(startUrl || '')) throw new Error('Open a page of the CRM first.');
-  const settings = await getSettings();
-  const hosts = [new URL(startUrl).host];
-  bulkInProgress = `a crawl of ${hosts[0]}`;
-  cancelRequested = false;
-  if (!mappingInProgress) await chrome.storage.session.remove('mapping');
-  await ensureConsoleWindow();
-  const run = startRun({ crmId: null, name: `Crawl of ${hosts[0]}`, phase: 'Starting…' });
-  const { stats, note } = run;
-  await run.publish();
-  const keepAlive = setInterval(() => chrome.runtime.getPlatformInfo(), 20_000);
-  const date = localDateKey();
-  const files = { values: csvFileName(settings, date, 'crawl_values'), pages: csvFileName(settings, date, 'crawl_pages') };
-  const crawl = {
-    out: { values: [], pages: [] },
-    queue: [{ url: startUrl, path: [] }],
-    queuedUrls: new Set([urlKey(startUrl)]),
-    seenContent: new Set(),
-    clicked: new Set(),
-    hosts,
-    stats,
-  };
-  const inHosts = (url) => {
-    try {
-      const u = new URL(url);
-      return /^https?:$/.test(u.protocol) && hostAllowed(u.host, hosts);
-    } catch {
-      return false;
-    }
-  };
-  crawl.enqueueUrl = (url) => {
-    if (!inHosts(url) || UNSAFE_LINK.test(url) || crawl.queuedUrls.has(urlKey(url))) return;
-    crawl.queuedUrls.add(urlKey(url));
-    crawl.queue.push({ url, path: [] });
-    stats.found++;
-  };
-  const writeFiles = async () => {
-    try {
-      await writeCsvFile(files.values, toCsv(crawl.out.values, VALUE_COLUMNS));
-      await writeCsvFile(files.pages, toCsv(crawl.out.pages, PAGE_COLUMNS));
-      stats.saved = crawl.out.values.length;
-      stats.files = [files.values, files.pages];
-      delete stats.fileError;
-    } catch (error) {
-      stats.fileError = `Could not write the crawl files: ${error.message}`;
-    }
-  };
-  stats.found = 1;
-  try {
-    await withBackgroundTab(startUrl, async (tab) => {
-      while (crawl.queue.length && stats.captured < CRAWL.maxStates && !cancelRequested) {
-        const state = crawl.queue.shift();
-        const where = [state.url, ...state.path.map(describeStep)].join(' > ');
-        stats.phase = `Reading ${where} (${crawl.queue.length} waiting)`;
-        await run.publish();
-        if (!(await openCrawlState(tab.id, state))) {
-          note(`Could not get to ${where}`);
-          continue;
-        }
-        const here = (await chrome.tabs.get(tab.id)).url;
-        // A card that opened the CRM on a host of its own: that host is crawled too.
-        if (state.path.length && /^https?:/i.test(here) && !inHosts(here)) {
-          hosts.push(new URL(here).host);
-          note(`Now crawling ${new URL(here).host} too (reached by clicking ${state.path.map(describeStep).join(' > ')})`);
-        }
-        if (!inHosts(here)) continue;
-        crawl.queuedUrls.add(urlKey(here));
-        // Where the clicks found on this state start from: its own address
-        // when it has one of its own, else the clicks that led here.
-        const base = urlKey(here) === urlKey(state.url) ? state : { url: here, path: [] };
-        const read = await readCrawlState(tab.id, crawl, { here, path: base.path, source: 'page' });
-        if (!read) continue; // the same content as a state already read
-        for (const link of read.links) crawl.enqueueUrl(link);
-        const moved = await crawlGrid(tab.id, crawl, { base, here });
-        if (base.path.length < CRAWL.maxClickDepth && !cancelRequested) {
-          if (moved && !(await openCrawlState(tab.id, base))) continue; // back from the grid's later pages and rows
-          await queueCrawlClicks(tab.id, crawl, base);
-        }
-        if (stats.captured % 10 === 0) await writeFiles();
-      }
-    });
-    await writeFiles();
-    if (crawl.queue.length && !cancelRequested) note(`Stopped at ${CRAWL.maxStates} pages; ${crawl.queue.length} were still waiting`);
-    return await finishRun(run, { crm: { name: `Crawl of ${hosts[0]}` } });
-  } catch (error) {
-    await writeFiles();
-    await finishRun(run, { crm: { name: `Crawl of ${hosts[0]}` } }, error);
-    throw error;
-  } finally {
-    clearInterval(keepAlive);
-    bulkInProgress = null;
-    await setProgress(null);
-    await endJob();
-  }
-}
-
-// Loads a state in the tab: its address, then the clicks that lead to it.
-async function openCrawlState(tabId, state, { pages = 0, table = null } = {}) {
-  await navigateTab(tabId, state.url).catch(() => {});
-  await settleTab(tabId);
-  if (state.path.length && (await replayPathInTab(tabId, state.path))) return false;
-  for (let i = 0; i < pages; i++) if (!(await pressListNext(tabId, table.container))) return false;
-  return true;
-}
-
-// Reads what the tab shows (or the panel root names) into the crawl's files.
-// Null when it showed exactly what an earlier state did.
-async function readCrawlState(tabId, crawl, { here, path, source, row = '', root = '' }) {
-  const results = (
-    await inFrames(tabId, (rootSel) => (window.__crmRuntime?.inlineFrame ? null : window.__crmRuntime?.scrapePage?.({ root: rootSel }) ?? null), [root])
-  )
-    .map((f) => f.result)
-    .filter(Boolean);
-  if (!results.length) return null;
-  const text = results.map((r) => r.text).join('\n');
-  const key = hashOf(`${text}\n${results.map((r) => JSON.stringify(r.fields)).join('')}`);
-  if (crawl.seenContent.has(key)) return null;
-  crawl.seenContent.add(key);
-  const { stats } = crawl;
-  const line = { page_url: here, click_path: path.map(describeStep).join(' > ') };
-  let fields = 0;
-  let tableRows = 0;
-  for (const r of results) {
-    for (const f of r.fields) crawl.out.values.push({ ...line, source: source === 'page' ? 'field' : source, table: '', row, label: f.label, value: f.value });
-    fields += r.fields.length;
-    for (const t of r.tables) {
-      t.rows.forEach((entry, i) => {
-        for (const [label, value] of Object.entries(entry)) crawl.out.values.push({ ...line, source: source === 'page' ? 'table' : source, table: t.name, row: row || String(i + 1), label, value });
-      });
-      tableRows += t.rows.length;
-    }
-  }
-  crawl.out.pages.push({ ...line, source, row, title: results[0].title, frames: results.length, fields, table_rows: tableRows, text: text.slice(0, CRAWL.textChars) });
-  stats.captured++;
-  stats.pages++;
-  stats.byKind = { 'pages and states': stats.captured };
-  stats.recent.unshift({ name: `${row || results[0].title || here}${line.click_path ? ` (${line.click_path})` : ''}`, kind: source, fields: fields + tableRows, messages: 0, url: here });
-  if (stats.recent.length > 60) stats.recent.pop();
-  return { links: results.flatMap((r) => r.links) };
-}
-
-// The page's main grid: each of its pages (by its "next" control) and each
-// row with no link, opened in place (its drawer read and closed) or, when
-// it opens a page of its own, that page queued. Whether it pressed anything
-// (the tab no longer shows the state as it was).
-async function crawlGrid(tabId, crawl, { base, here }) {
-  const found = (await inFrames(tabId, () => (window.__crmRuntime?.inlineFrame ? null : window.__crmRuntime?.describeTable?.() ?? null))).map((f) => f.result).find(Boolean);
-  if (!found) return false;
-  let moved = false;
-  const table = found.spec;
-  let open = null; // what opens a row, once known; false: the rows open nothing
-  for (let pageNo = 0; pageNo < CRAWL.pagesPerGrid && !cancelRequested; pageNo++) {
-    if (pageNo) {
-      const read = await readCrawlState(tabId, crawl, { here, path: base.path, source: `grid page ${pageNo + 1}` });
-      if (!read) break; // "next" showed nothing new
-      for (const link of read.links) crawl.enqueueUrl(link);
-    }
-    const rows = (await inFrames(tabId, (spec) => window.__crmRuntime?.readTable?.(spec) ?? null, [table])).map((f) => f.result).find((r) => r?.rows?.length)?.rows ?? [];
-    for (const [i, row] of rows.slice(0, CRAWL.rowsPerGrid).entries()) {
-      if (open === false || cancelRequested || row.link) continue; // rows with a link are crawled by their address
-      const title = row.cells.find(Boolean) ?? `row ${i + 1}`;
-      crawl.stats.phase = `Opening ${title} (${crawl.queue.length} waiting)`;
-      await chrome.storage.session.set({ bulk: crawl.stats });
-      const openers = open ? [open] : (await inFrames(tabId, (spec, idx) => window.__crmRuntime?.rowOpeners?.(spec, idx) ?? [], [table, i])).flatMap((f) => f.result ?? []);
-      let outcome = null;
-      for (const candidate of openers) {
-        await inFrames(tabId, () => window.__crmRuntime?.markVisible?.());
-        const pressed = (await inFrames(tabId, (spec, idx, o) => window.__crmRuntime?.pressRow?.(spec, idx, o) ?? false, [table, i, candidate])).some((f) => f.result);
-        if (!pressed) continue;
-        moved = true;
-        await settleTab(tabId);
-        const now = (await chrome.tabs.get(tabId)).url;
-        if (urlKey(now) !== urlKey(here)) {
-          crawl.enqueueUrl(now);
-          outcome = 'page';
-        } else {
-          const panel = (await inFrames(tabId, (ex) => window.__crmRuntime?.openedPanel?.({ exclude: ex }) ?? null, [table.container]))
-            .map((f) => f.result)
-            .filter(Boolean)
-            .sort((a, b) => b.length - a.length)[0];
-          if (panel) {
-            outcome = 'panel';
-            await readCrawlState(tabId, crawl, { here, path: base.path, source: 'row panel', row: title, root: panel.selector });
-            const close = (await inFrames(tabId, (sel) => (window.__crmRuntime?.shown?.(sel) ? window.__crmRuntime.describeClose(sel) : null), [panel.selector])).map((f) => f.result).find(Boolean);
-            if (close) {
-              await inFrames(tabId, (spec, sel) => (window.__crmRuntime?.shown?.(sel) ? window.__crmRuntime.pressClose(spec) : false), [close, panel.selector]);
-              await settleQuick(tabId);
-            }
-          }
-        }
-        if (outcome) {
-          open = candidate;
-          break;
-        }
-      }
-      if (!outcome && !open) open = false; // the first row opened nothing: the others will not either
-      // A row that led away: back to this page of the grid.
-      if (outcome === 'page' && !(await openCrawlState(tabId, base, { pages: pageNo, table }))) return true;
-    }
-    if (!(await pressListNext(tabId, table.container))) break;
-    moved = true;
-  }
-  return moved;
-}
-
-// The safe things to click on this state, queued as states of their own.
-async function queueCrawlClicks(tabId, crawl, base) {
-  const frames = await inFrames(tabId, () => (window.__crmRuntime?.inlineFrame ? null : window.__crmRuntime?.clickables?.() ?? null));
-  let taken = 0;
-  for (const { frameId, result } of frames) {
-    for (const c of result ?? []) {
-      if (taken >= CRAWL.clicksPerPage) return;
-      if (c.link || c.selected || c.area === 'table' || c.area === 'grid') continue; // links go by address; grid cells are rows
-      if (UNSAFE_CLICK.test(c.text) || CRAWL_UNSAFE.test(c.text) || PAGER_CAPTION.test(c.text)) continue;
-      const key = GLOBAL_AREAS.has(c.area) ? `${c.area}|${c.text}` : `${urlKey(base.url)}|${base.path.map(describeStep).join('>')}|${c.text}`;
-      if (crawl.clicked.has(key)) continue;
-      const [described] = await chrome.scripting.executeScript({ target: { tabId, frameIds: [frameId] }, func: (id) => window.__crmRuntime?.describeNav?.(id) ?? null, args: [c.id] }).catch(() => []);
-      if (!described?.result) continue;
-      crawl.clicked.add(key);
-      taken++;
-      crawl.queue.push({ url: base.url, path: [...base.path, { label: c.text, nav: described.result }] });
-      crawl.stats.found++;
-    }
-  }
-}
-
-// The popup shows this while a capture runs.
-async function setProgress(progress) {
-  await chrome.storage.session.set({ progress });
-}
-
 // ---------------------------------------------------- the capture window
 
-// Long jobs run in their own window: the extension's console page as the
+// A capture runs in its own window: the extension's console page as the
 // first tab (status, progress, log, what was captured) and one or two work
 // tabs beside it in which the CRM pages are loaded one after another. The
 // work tabs are reused for the whole job instead of opened and closed for
@@ -1250,7 +716,7 @@ const work = { windowId: null, tabs: [] }; // tabs: [{ id, busy }]
 
 async function ensureConsoleWindow() {
   // By its address among all tabs: a url filter in tabs.query does not match chrome-extension:// pages.
-  const existing = (await chrome.tabs.query({})).find((t) => (t.url || t.pendingUrl || "").startsWith(CONSOLE_URL));
+  const existing = (await chrome.tabs.query({})).find((t) => (t.url || t.pendingUrl || '').startsWith(CONSOLE_URL));
   if (existing) {
     work.windowId = existing.windowId;
     await chrome.windows.update(existing.windowId, { focused: true }).catch(() => {});
@@ -1396,299 +862,11 @@ async function extractWithConfig(tabId, pageType) {
   return result;
 }
 
-async function aiExtract(tab, settings) {
-  const frames = await snapshotFrames(tab.id);
-  if (!frames.length) throw new Error('No readable content found on this page.');
-  const data = await backend(settings, 'POST', '/api/extract', {
-    url: tab.url,
-    title: tab.title || '',
-    targets: settings.captureTargets,
-    selection: frames.map((f) => f.selection).filter(Boolean).join('\n').slice(0, 5000),
-    frames: frames.map(({ url, isTop, text, phones, emails }) => ({ url, isTop, text, phones, emails })),
-  });
-  return {
-    pageType: data.pageType,
-    dataset: datasetById(data.dataset)?.id ?? OTHER_DATASET,
-    records: data.records.map((record) => ({
-      fields: record.fields.map((field) => ({ ...field, value: normalizeValue(field.key, field.value) })),
-    })),
-  };
-}
-
-async function snapshotFrames(tabId) {
-  let results;
-  try {
-    results = await chrome.scripting.executeScript({ target: { tabId, allFrames: true }, files: ['content/snapshot.js'] });
-  } catch {
-    results = await chrome.scripting.executeScript({ target: { tabId }, files: ['content/snapshot.js'] });
-  }
-  const seen = new Set();
-  const frames = [];
-  for (const { result } of results) {
-    if (!result || !(result.text || result.phones.length || result.emails.length || result.selection)) continue;
-    if (seen.has(result.text)) continue; // same content mounted twice
-    seen.add(result.text);
-    frames.push(result);
-  }
-  return frames.sort((a, b) => Number(b.isTop) - Number(a.isTop));
-}
-
-// ------------------------------------------------------------------ backend
-
-async function backend(settings, method, path, body) {
-  const base = settings.backendUrl.replace(/\/+$/, '');
-  let response;
-  try {
-    response = await fetch(base + path, {
-      method,
-      headers: { 'content-type': 'application/json', 'x-api-key': settings.apiKey },
-      body: body ? JSON.stringify(body) : undefined,
-      signal: AbortSignal.timeout(150_000), // big tables can take the model a while
-    });
-  } catch (error) {
-    if (error.name === 'TimeoutError') throw new Error('The extraction server took too long to answer. Try again.');
-    throw new Error(`Can't reach the extraction server at ${base}. Check it's running and the URL in Settings is right.`);
-  }
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.error || `Extraction server error (${response.status}).`);
-  return data;
-}
-
-// The config is cached for a few minutes and revalidated with its ETag; if
-// the server is unreachable the last copy keeps working.
-async function getCrmConfig(settings, { force = false } = {}) {
-  const { crmConfig: cached } = await chrome.storage.local.get('crmConfig');
-  if (!force && cached && Date.now() - cached.fetchedAt < CONFIG_MAX_AGE_MS) return cached.data;
-  try {
-    const response = await fetch(`${settings.backendUrl.replace(/\/+$/, '')}/api/config`, {
-      headers: { 'x-api-key': settings.apiKey, ...(cached?.etag ? { 'if-none-match': cached.etag } : {}) },
-      signal: AbortSignal.timeout(8000),
-    });
-    if (response.status === 304 && cached) {
-      await chrome.storage.local.set({ crmConfig: { ...cached, fetchedAt: Date.now() } });
-      return cached.data;
-    }
-    if (response.ok) {
-      const data = await response.json();
-      await chrome.storage.local.set({ crmConfig: { data, etag: response.headers.get('etag'), fetchedAt: Date.now() } });
-      return data;
-    }
-  } catch {
-    // offline: use the cached copy
-  }
-  return cached?.data ?? null;
-}
-
-// Tells the backend which page the rules failed on (URL and field names
-// only) and makes the next extraction re-check the config. A CRM that was
-// mapped from this browser is re-mapped from this browser.
-async function reportFailure(settings, report) {
-  const { crmConfig } = await chrome.storage.local.get('crmConfig');
-  if (crmConfig) await chrome.storage.local.set({ crmConfig: { ...crmConfig, fetchedAt: 0 } });
-  try {
-    const result = await backend(settings, 'POST', '/api/extraction-failures', report);
-    if (result.extension) {
-      const crm = crmConfig?.data?.crms?.[report.crmId];
-      if (crm && !mappingInProgress) {
-        mapFromBrowser({ site: siteOf(report.crmId, crm), onlyUrl: report.url, reason: `extraction failed (${report.missing.join(', ') || report.errors.map((e) => e.error).join(', ')})` }).catch(() => {});
-      }
-      return true;
-    }
-    return Boolean(result.queued || result.jobId);
-  } catch {
-    return false;
-  }
-}
-
-// ------------------------------------------------- mapping from the browser
-
-// The mapping agent, run here so the user's signed-in session does the
-// browsing: the server only answers the LLM questions and keeps the config.
-let mappingInProgress = null;
-
-const siteOf = (id, crm) => ({ id, name: crm.name, match: crm.match, startUrl: crm.startUrl, targets: datasetsOfCrm(crm) });
-
-// site: { id, name, match: { hosts }, startUrl }; or startUrl alone to make
-// one from the page's host.
-// capture: read and save each kind of data as soon as its layout is ready,
-// while the agent maps the next kind (a first mapping asked for by the user).
-async function mapFromBrowser({ site, startUrl, onlyUrl = null, reason = 'requested from the extension', fromUser = false, capture = false }) {
-  if (mappingInProgress) throw new Error(`Already mapping ${mappingInProgress}. Wait for it to finish.`);
-  if (!site) {
-    const { host } = new URL(startUrl);
-    site = { id: host.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase(), name: detectSite(startUrl), match: { hosts: [host] }, startUrl };
-  }
-  const settings = await getSettings();
-  const call = (method, path, body) => backend(settings, method, path, body);
-  // A mapping the user asks for follows the "What to capture" setting (so
-  // changing it and re-mapping switches a CRM over); automatic ones (daily
-  // refresh, healing one page) keep the kinds the CRM was mapped for.
-  const datasets = datasetsFrom(fromUser && !onlyUrl ? settings.captureTargets : site.targets?.length ? site.targets : settings.captureTargets);
-  if (!datasets.length) throw new Error('Nothing to capture is selected. Tick at least one kind of data in Settings.');
-  site = { ...site, targets: datasets.map((d) => d.id) };
-  // More kinds to find means more of the CRM to look at.
-  const crawl = { maxPages: onlyUrl ? 16 : Math.min(32, 12 + 4 * datasets.length), perPattern: 2 };
-  const startedAt = Date.now();
-  // What the popup shows: the stage list, the current detail, and an estimate.
-  const state = {
-    crmId: site.id, name: site.name, startedAt, status: 'running', onlyUrl, targets: site.targets, targetLabel: datasets.map((d) => d.plural).join(', '),
-    stage: 'explore', detail: 'Starting…', current: 0, total: crawl.maxPages,
-    llmCalls: 0, avgLlmMs: LLM_CALL_MS, plan: null, estimateMs: onlyUrl ? 60_000 : 180_000, log: [],
-  };
-  let llmStarted = 0;
-  const publish = () => chrome.storage.session.set({ mapping: { ...state, log: state.log.slice(-40) } });
-  const record = (line) => {
-    state.log.push(line);
-    publish();
-  };
-  const progress = (event) => {
-    if (llmStarted) {
-      // The previous event marked an LLM call; this one ends it.
-      state.avgLlmMs = Math.max(12_000, Math.round((state.avgLlmMs * state.llmCalls + (Date.now() - llmStarted)) / (state.llmCalls + 1)));
-      state.llmCalls++;
-      llmStarted = 0;
-    }
-    if (event.llmCall) llmStarted = Date.now();
-    if (event.stage) state.stage = event.stage;
-    if (event.stage === 'record' && event.current === 1) state.recordsStarted = (state.recordsStarted ?? 0) + 1;
-    if (event.detail) state.detail = event.detail;
-    state.current = event.current ?? (event.stage ? 0 : state.current);
-    state.total = event.total ?? (event.stage ? 0 : state.total);
-    if (event.plan) state.plan = event.plan;
-    state.estimateMs = estimateMapping(state, startedAt);
-    publish();
-  };
-  mappingInProgress = site.name;
-  if (!bulkInProgress) await chrome.storage.session.remove('bulk'); // a finished capture's panel makes way
-  const windowId = await ensureConsoleWindow();
-  const keepAlive = setInterval(() => chrome.runtime.getPlatformInfo(), 20_000); // keeps the worker alive during minutes of work
-
-  // The capture lane: layouts arrive one kind at a time (onReady) and are
-  // captured one after another in work tabs, while the agent keeps mapping
-  // in its own tab. It outlives the mapping when there is a lot to read.
-  const draft = { name: site.name, match: site.match, startUrl: site.startUrl, targets: site.targets, pageTypes: [] };
-  const ctx = { crmId: site.id, crm: draft, settings, heal: false };
-  let run = null;
-  let lane = Promise.resolve();
-  let laneKeepAlive = null;
-  if (capture && !onlyUrl && !bulkInProgress) {
-    bulkInProgress = site.name;
-    cancelRequested = false;
-    run = startRun({ crmId: site.id, name: site.name, phase: 'Capturing starts as soon as the first layout is ready…', withMapping: true });
-    await run.publish();
-    laneKeepAlive = setInterval(() => chrome.runtime.getPlatformInfo(), 20_000);
-  }
-  const onReady = async (fresh) => {
-    draft.pageTypes.push(...fresh);
-    if (!run) return;
-    const lists = fresh.filter((pt) => pt.role === 'list');
-    const screens = fresh.filter((pt) => pt.role === 'screen');
-    const listless = fresh.filter((pt) => pt.role === 'record' && !lists.some((l) => l.recordPageType === pt.id) && !draft.pageTypes.some((s) => s.role === 'screen' && s.recordPageType === pt.id));
-    record(`Layout ready: ${fresh.map((pt) => `${pt.id} (${pt.role})`).join(', ')}; capturing it now`);
-    lane = lane
-      .then(async () => {
-        if (lists.length) await captureLists(run, ctx, lists);
-        if (screens.length) await captureScreens(run, ctx, screens);
-        for (const recordType of listless) await captureUrls(run, ctx, recordType, recordType.samples ?? []);
-      })
-      .catch((error) => run.note(`Capture problem: ${error.message}`));
-  };
-  // Ends the run once everything handed over has been captured.
-  const closeLane = () => {
-    if (!run) return;
-    lane
-      .then(() => finishRun(run, ctx))
-      .catch(() => {})
-      .finally(async () => {
-        clearInterval(laneKeepAlive);
-        bulkInProgress = null;
-        if (!run.stats.found) await chrome.storage.session.remove('bulk'); // nothing to show
-        await setProgress(null);
-        if (!mappingInProgress) await endJob();
-      });
-  };
-  await chrome.action.setBadgeBackgroundColor({ color: '#8a5d00' });
-  await chrome.action.setBadgeText({ text: 'MAP' });
-  try {
-    record(`Mapping ${site.name} from this browser…`);
-    const entry = await runMapper({
-      site: { ...site, crawl },
-      llm: remoteLLM(call),
-      store: remoteStore(call, (opts) => getCrmConfig(settings, opts)),
-      adapter: chromeAdapter(site, { windowId }),
-      log: record,
-      progress,
-      onlyUrl,
-      reason,
-      mappedBy: 'extension',
-      datasets,
-      onReady,
-    });
-    await getCrmConfig(settings, { force: true });
-    Object.assign(state, { status: 'done', stage: 'save', detail: `Layout v${entry.version} saved`, version: entry.version, pageTypes: entry.pageTypes, finishedAt: Date.now() });
-    await publish();
-    return { crmId: site.id, version: entry.version, pageTypes: entry.pageTypes, capturing: Boolean(run) };
-  } catch (error) {
-    Object.assign(state, { status: 'failed', error: error.message, finishedAt: Date.now() });
-    await publish();
-    throw error;
-  } finally {
-    clearInterval(keepAlive);
-    mappingInProgress = null;
-    if (!run) await setProgress(null);
-    await showCount((await dayCounts(localDateKey())).count);
-    closeLane();
-  }
-}
-
-// A rough duration for the whole mapping: exploring is a few seconds per
-// page; every LLM call is the slow part (~20 s each; measured as they go);
-// each record costs about three of them (the record, one section, its
-// message page) plus its validation, each list a few seconds.
-const LLM_CALL_MS = 20_000;
-const PAGE_MS = 2_500;
-function estimateMapping(state, startedAt) {
-  const elapsed = Date.now() - startedAt;
-  const llm = state.avgLlmMs;
-  if (state.onlyUrl) return Math.max(elapsed + 15_000, 3 * llm + 30_000);
-  // Exploring by clicking: about half of the click budget gets used.
-  if (state.plan?.clicks && state.stage === 'explore') return elapsed + Math.max(2, (state.plan.clicks - (state.current || 0)) * 0.5) * (Math.min(llm, 15_000) + 4_000);
-  if (state.plan?.clicks) return elapsed + 2 * llm + 20_000;
-  if (!state.plan) {
-    const exploreLeft = Math.max(0, (state.total || 16) - (state.current || 0)) * PAGE_MS;
-    return elapsed + exploreLeft + llm + 3 * llm + 40_000; // assume one record type
-  }
-  const perRecord = 3 * llm + 25_000;
-  // Records not started yet, plus the unfinished part of the current one
-  // (its sections and message page still ahead while its record is mapped).
-  const started = state.recordsStarted ?? 0;
-  const partLeft = { record: 0.65, validate: 0.4, message: 0.25 }[state.stage] ?? 0;
-  const remainingRecords = Math.max(0, state.plan.records - started) + (started ? partLeft : 0);
-  const listsLeft = ['list', 'save'].includes(state.stage) ? 0 : state.plan.lists;
-  const rest = state.stage === 'save' ? 0 : remainingRecords * perRecord + listsLeft * 8_000 + 5_000;
-  return elapsed + rest;
-}
-
-// Daily re-map of the CRMs this browser mapped, while it is open and signed in.
-chrome.alarms.create('remap-daily', { periodInMinutes: 24 * 60 });
-chrome.alarms.onAlarm.addListener(async (alarm) => {
-  if (alarm.name !== 'remap-daily' || mappingInProgress) return;
-  const settings = await getSettings();
-  const config = await getCrmConfig(settings, { force: true });
-  for (const [id, crm] of Object.entries(config?.crms ?? {})) {
-    if (!crm.mappedBy?.startsWith('extension') || !crm.startUrl) continue;
-    if (Date.now() - Date.parse(crm.mappedAt ?? 0) < 23 * 3_600_000) continue;
-    await mapFromBrowser({ site: siteOf(id, crm), reason: 'daily refresh' }).catch(() => {});
-  }
-});
-
 // ------------------------------------------------------------------- saving
 
-// records: [{ fields: { key: value }, unverified: [key], collections,
-// pageUrl?, recordId?, dataset? }]: one row each in the file of its kind
-// (meta.dataset when the record names none; customers by default), plus one
-// message row per collection entry. Records captured from a list carry
-// their own page URL.
+// records: [{ fields: { key: value }, collections, pageUrl?, recordId?,
+// dataset? }]: one row each in the file of its kind (customers by default),
+// plus one message row per collection entry.
 async function save({ records = [], meta = {} }) {
   const settings = await getSettings();
   const capturedAt = localTimestamp();
@@ -1704,7 +882,7 @@ async function save({ records = [], meta = {} }) {
     byKind.set(dataset, [...(byKind.get(dataset) ?? []), ...built.rows]);
     newMessages.push(...built.messages);
   }
-  if (!byKind.size) throw new Error('Nothing to save. Add at least one value.');
+  if (!byKind.size) throw new Error('Nothing to save.');
 
   const date = localDateKey();
   return serialized(async () => {
