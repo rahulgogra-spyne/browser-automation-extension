@@ -73,7 +73,7 @@ function renderRecent(bulk) {
 }
 
 function renderLog(lines) {
-  const text = lines.join('\n');
+  const text = [...lines, ...(diagnostic.length ? ['', '— Describe this tab —', ...diagnostic] : [])].join('\n');
   if (text === lastLog) return;
   lastLog = text;
   $('log').textContent = text;
@@ -146,10 +146,13 @@ async function refreshTabGrid() {
   else $('site-grid').textContent = 'On this tab: no data grid found. Open a list screen in the CRM first.';
 }
 
+let diagnostic = [];
 async function tick() {
-  const { bulk } = await send({ type: 'bulkStatus' }).catch(() => ({ bulk: null }));
+  const status = await send({ type: 'bulkStatus' }).catch(() => ({ bulk: null, diagnostic: [] }));
+  const { bulk } = status;
+  diagnostic = status.diagnostic ?? [];
   busy = bulk?.status === 'running';
-  $('clear').hidden = busy || !bulk;
+  $('clear').hidden = busy || (!bulk && !diagnostic.length);
   if (bulk) renderBulk(bulk);
   else renderIdle();
   $('capture-crm').disabled = busy || !crms.length;
@@ -178,6 +181,16 @@ function start(crmId, startUrl = null) {
 
 $('capture-crm').addEventListener('click', () => start($('crm-select').value));
 $('site-capture').addEventListener('click', () => activeSite?.crmId && start(activeSite.crmId, activeSite.url));
+$('describe-tab').addEventListener('click', async () => {
+  if (!activeSite) return;
+  $('now-note').textContent = '';
+  try {
+    await send({ type: 'describeTab', tabId: activeSite.tabId });
+    await tick();
+  } catch (error) {
+    $('now-note').textContent = error.message;
+  }
+});
 $('here-capture').addEventListener('click', () => {
   if (!activeSite) return;
   if (!confirm(`Capture the list shown on ${activeSite.host}? It is read page after page in that tab (don't use the tab meanwhile) and saved to today's CSV as it goes.`)) return;

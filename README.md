@@ -101,7 +101,9 @@ To add or change a CRM, edit the file and reload the extension (`chrome://extens
 
 The bundled entry matches `app-unify.app.connectcdk.com` and `crm.connectcdk.com`. Its screens start from the launcher (`/applications`), press the **CRM** card (which opens the CRM in a new tab; the capture follows it in its work tab), then the menu entries: **Vehicle Search** (inventory grid, read as is) and **Prospects → Active** / **Prospects** (empty until **Search** is pressed: the capture presses it, learns the results grid from its headers, and reads it page after page). If the account has several dealerships, the dealership switcher in the CRM's header is used and each dealership is captured to its own files.
 
-If a screen does not come out right, open it yourself in the CRM with the filters you want and use **Capture this tab**; the log says what was found (`Found N stores…`, `pressed "Search"…`, `learned the grid…`), and the `path` / `load` / `stores` settings of the entry can be tuned from that.
+If a screen does not come out right, open it yourself in the CRM with the filters you want and use **Capture this tab**; the log says what was found (`Found N stores…`, `pressed "Search"…`, `learned the grid…`), and the `path` / `load` / `stores` settings of the entry can be tuned from that. **Describe this tab** writes to the log what the extension sees on the open CRM tab — every frame with its grids (columns, row count, first row), the Search button it would press, store switcher candidates, selects and buttons — which is what to send when a screen comes out wrong. A capture also writes that report by itself when a menu step is not found or a screen shows no grid.
+
+A grid that reads only a few rows with most columns empty (a search-criteria form laid out as a table, or a grid not loaded yet) is treated as not loaded: Search is pressed and the better reading kept. Rows made mostly of input boxes are never taken for data.
 
 ## Limits
 

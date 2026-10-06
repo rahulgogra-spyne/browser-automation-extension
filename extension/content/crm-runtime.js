@@ -15,7 +15,7 @@
 // A selector reaches into a web component's shadow root with " >>> ":
 //   "records-record-layout >>> div.slds-form-element > span"
 (() => {
-  const RUNTIME_VERSION = 5;
+  const RUNTIME_VERSION = 6;
   if (window.__crmRuntime?.version >= RUNTIME_VERSION) return;
 
   const STABLE_ATTRS = ['data-testid', 'data-test', 'data-qa', 'data-field', 'data-key', 'data-name', 'data-label', 'name', 'aria-label'];
@@ -1024,8 +1024,16 @@
   const CELL_SEL = 'td, [role="gridcell"], [role="cell"]';
   const HEADER_SEL = 'th, [role="columnheader"]';
   const directCells = (row) => [...row.children].filter((c) => c.matches(CELL_SEL));
+  // A row whose cells are mostly input boxes is a search form laid out as a
+  // table (criteria: "VIN #" [____] "Mileage From" [____]), not data.
+  const FORM_FIELD = 'input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]):not([type="button"]):not([type="submit"]), select, textarea';
+  const formRow = (row) => {
+    const cells = directCells(row);
+    const withField = cells.filter((c) => findEverywhere(c, FORM_FIELD).some(isVisible)).length;
+    return withField >= Math.max(1, Math.ceil(cells.length / 3));
+  };
   const dataRows = (root) =>
-    findEverywhere(root, 'tr, [role="row"]').filter((row) => isVisible(row) && directCells(row).length >= 2 && !row.querySelector(HEADER_SEL) && !row.closest('thead'));
+    findEverywhere(root, 'tr, [role="row"]').filter((row) => isVisible(row) && directCells(row).length >= 2 && !row.querySelector(HEADER_SEL) && !row.closest('thead') && !formRow(row));
 
   function cellValue(cell) {
     const box = cell.querySelector('input[type="checkbox"], input[type="radio"]');
@@ -1060,6 +1068,41 @@
       if (described && isDataGrid(described.spec)) return described;
     }
     return null;
+  }
+
+  // Every grid on this frame, biggest first: [{ headers, count, container, calendar }].
+  function describeTables(limit = 6) {
+    const groups = new Map();
+    for (const row of dataRows(document)) {
+      const parent = parentOf(row);
+      if (!groups.has(parent)) groups.set(parent, []);
+      groups.get(parent).push(row);
+    }
+    return [...groups]
+      .map(([parent, rows]) => ({ parent, rows, cells: directCells(rows[0]).length, score: rows.length * directCells(rows[0]).length }))
+      .sort((a, b) => b.score - a.score)
+      .slice(0, limit)
+      .map((g) => {
+        const d = describeGroup(g);
+        return d ? { headers: d.headers, count: d.count, container: d.spec.container, sample: d.rows[0] ?? [], calendar: !isDataGrid(d.spec) } : null;
+      })
+      .filter(Boolean);
+  }
+
+  // What a person would see on this frame, for a diagnostic report: grids,
+  // buttons, selects, store switcher candidates, a search button.
+  function describePage() {
+    const caption = (el) => clean(el.tagName === 'INPUT' ? el.value || el.getAttribute('aria-label') || el.getAttribute('title') || '' : navText(el) || el.getAttribute('aria-label') || el.getAttribute('title') || '');
+    const buttons = findEverywhere(document, 'button, input[type="submit"], input[type="button"], [role="button"], a[role="menuitem"], [role="tab"]')
+      .filter(isVisible)
+      .map((el) => `${caption(el) || '(no caption)'}${el.className && typeof el.className === 'string' ? ` [${el.className.split(/\s+/).slice(0, 2).join('.')}]` : ''}`)
+      .filter((t, i, all) => all.indexOf(t) === i)
+      .slice(0, 60);
+    const selects = findEverywhere(document, 'select').filter(isVisible).map((sel) => `${captionOf(sel) || sel.id || 'select'} (${sel.options.length} options: ${[...sel.options].slice(0, 5).map((o) => clean(o.textContent)).join(' | ')}${sel.options.length > 5 ? ' …' : ''})`).slice(0, 20);
+    const loader = describeLoader();
+    const stores = [...storeSelects().map((s) => `select "${s.caption}": ${s.options.map((o) => o.text).slice(0, 8).join(' | ')}`), ...storeMenus().map((m) => `menu "${m.caption}" (${m.control.css})`)];
+    const headings = findEverywhere(document, 'h1, h2, h3, [role="heading"]').filter(isVisible).map((h) => clean(h.innerText)).filter(Boolean).slice(0, 10);
+    return { url: location.href, title: document.title, top: window === window.top, size: `${innerWidth}x${innerHeight}`, headings, grids: describeTables(), buttons, selects, loader: loader?.text ?? null, stores, text: pageText().slice(0, 400) };
   }
 
   function describeGroup(best) {
@@ -1109,7 +1152,7 @@
     let rowEls = [];
     if (spec.row) {
       try {
-        rowEls = queryDeep(container, spec.row).filter((row) => isVisible(row) && directCells(row).length >= 2);
+        rowEls = queryDeep(container, spec.row).filter((row) => isVisible(row) && directCells(row).length >= 2 && !formRow(row));
       } catch {
         rowEls = [];
       }
@@ -1222,7 +1265,11 @@
       .filter((el) => !deepClosest(el, 'tr, [role="row"], [role="dialog"] [role="row"]')); // not a row's own button
     if (!candidates.length) return null;
     // A button beside filter fields first, then a "Search" over a "Go".
-    const score = (el) => (nearInputs(el) ? 10 : 0) + (/^search|^find|^show|^load|^run|^apply|^view/i.test(loaderText(el)) ? 2 : 0) + (el.tagName === 'A' ? -1 : 0);
+    const inBar = (el) => Boolean(deepClosest(el, 'header, nav, [role="banner"], [role="navigation"], [class*="topbar" i], [class*="navbar" i]'));
+    const score = (el) => {
+      const t = loaderText(el);
+      return (nearInputs(el) ? 10 : 0) + (/^(search|find|run search|get results|results)$/i.test(t) ? 6 : /^(show|load|run|apply|view|go|submit|filter)/i.test(t) ? 3 : /^(refresh|ok|list|display|retrieve|fetch|query)$/i.test(t) ? -2 : 0) + (inBar(el) ? -8 : 0) + (el.tagName === 'A' ? -1 : 0);
+    };
     return candidates.sort((a, b) => score(b) - score(a))[0];
   }
   const describeLoader = () => {
@@ -1732,5 +1779,7 @@
     selectStore,
     currentStore,
     frameInfo: () => ({ url: location.href, title: document.title, top: window === window.top, rows: dataRows(document).length }),
+    describeTables,
+    describePage,
   };
 })();

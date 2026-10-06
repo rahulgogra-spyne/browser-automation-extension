@@ -58,13 +58,14 @@ const handlers = {
     return {};
   },
   bulkStatus: async () => {
-    const { bulk } = await chrome.storage.session.get('bulk');
-    return { bulk: bulk ?? null };
+    const { bulk, diagnostic } = await chrome.storage.session.get(['bulk', 'diagnostic']);
+    return { bulk: bulk ?? null, diagnostic: diagnostic ?? [] };
   },
   // A finished job is cleared so the capture window returns to idle.
   clearJobs: async () => {
     const { bulk } = await chrome.storage.session.get('bulk');
     if (bulk && bulk.status !== 'running') await chrome.storage.session.remove('bulk');
+    await chrome.storage.session.remove('diagnostic');
     return {};
   },
   listCrms: async () => ({ crms: await listCrms() }),
@@ -94,6 +95,16 @@ const handlers = {
   // The list on the CRM tab the user set up (menus clicked, Search pressed):
   // its grid is learned and read page after page, in that tab.
   captureHere,
+  // Everything the CRM tab shows (frames, grids, buttons, selects, store switchers), for the log.
+  describeTab: async ({ tabId }) => {
+    const tab = await chrome.tabs.get(tabId).catch(() => null);
+    if (!tab || !/^https?:/i.test(tab.url || '')) throw new Error('Open the CRM in a tab first.');
+    await inject(tabId, ['content/crm-runtime.js']);
+    const lines = [`${new Date().toLocaleTimeString()}  Describing ${tab.url}`, ...(await describeTab(tabId, { full: true })).map((l) => `            ${l}`)];
+    const { diagnostic = [] } = await chrome.storage.session.get('diagnostic');
+    await chrome.storage.session.set({ diagnostic: [...diagnostic, ...lines].slice(-400) });
+    return { lines };
+  },
   // Whether the CRM tab shows a data grid now, for the capture window.
   tabGrid: async ({ tabId }) => {
     const tab = await chrome.tabs.get(tabId).catch(() => null);
@@ -453,7 +464,7 @@ async function settleTab(tabId) {
 
 const frameWithStep = async (tabId, step) => (await inFrames(tabId, (spec) => window.__crmRuntime?.hasNav?.(spec) ?? false, [step.nav])).find((f) => f.result)?.frameId ?? null;
 
-async function pressStepInTab(tabId, step, tries = 6) {
+async function pressStepInTab(tabId, step, tries = 12) {
   for (let attempt = 0; attempt < tries; attempt++) {
     const frameId = await frameWithStep(tabId, step);
     if (frameId !== null) {
@@ -585,52 +596,84 @@ async function replayLoadSteps(tabId, steps = []) {
 }
 
 // Reads the grid of a screen in a tab. The saved grid first (a learned one
-// from a previous run before it); when that reads nothing, the Search button
-// on screen is pressed and the grid learned afresh. Returns { table, read,
+// from a previous run before it); when nothing reads, or what reads is weak
+// (few rows, most columns empty: a filter form caught as the grid, or a
+// grid not loaded yet), the Search button on screen is pressed and the grid
+// read or learned again; the better reading wins. Returns { table, read,
 // learned, pressed } with read = { rows, signature }, or null.
+const WEAK_ROWS = 3;
+const WEAK_FILL = 0.35;
 async function loadGrid(tabId, ctx, screen, { note, pressFirst = false }) {
-  // After a store switch the grid may still show the previous store's rows: run the search again first.
-  if (pressFirst) {
-    const pressed = (await inFrames(tabId, () => window.__crmRuntime?.pressLoader?.() ?? null)).map((f) => f.result).find(Boolean) ?? null;
-    if (pressed) {
-      note(`"${screen.entity}": pressed "${pressed.text}" to load this store's data`);
-      await settleTab(tabId);
-    }
-  }
   const readWith = async (table) => (await inFrames(tabId, (spec) => window.__crmRuntime?.readTable?.(spec) ?? null, [table])).map((f) => f.result).find((r) => r?.rows?.length) ?? null;
   const usable = (table) => table && (table.columns?.length ?? 0) > 0 && !/datepicker|calendar/i.test(table.container || '') && !(table.headers?.length >= 5 && table.headers.every((h) => /^(su|mo|tu|we|th|fr|sa|s|m|t|w|f)$/i.test(h)));
+  const quality = (table, read) => {
+    const cols = Math.max(1, table.columns?.length ?? 1);
+    const fill = read.rows.reduce((n, r) => n + Object.keys(r.fields ?? {}).length, 0) / (read.rows.length * cols);
+    return { rows: read.rows.length, fill, score: read.rows.length * Math.max(fill, 0.05) };
+  };
+  const weak = (q) => !q || q.rows < WEAK_ROWS || q.fill < WEAK_FILL;
+  const press = async (why) => {
+    const pressed = (await inFrames(tabId, () => window.__crmRuntime?.pressLoader?.() ?? null)).map((f) => f.result).find(Boolean) ?? null;
+    if (!pressed) return null;
+    note(`"${screen.entity}": pressed "${pressed.text}" ${why}`);
+    await settleTab(tabId);
+    return pressed.text;
+  };
   const learnedBefore = ctx.crmId && screen.id ? await getLearnedGrid(ctx.crmId, screen.id) : null;
   const saved = [learnedBefore?.table, screen.table].filter(usable);
-  for (const table of saved) {
-    const read = await readWith(table);
-    if (read) return { table, read, learned: table === learnedBefore?.table, pressed: null };
-  }
-  if (saved.length) note(`"${screen.entity}": the grid shows no rows yet`);
-  else if (screen.table) note(`"${screen.entity}": the saved grid (${(screen.table.headers ?? []).slice(0, 7).join(', ')}) is not a data grid`);
-  // A data grid already on screen (the user ran the search) is learned as is;
-  // otherwise Search / Find / Go / Show is pressed first, then it is learned.
-  const learn = async (pressed) => {
+  // The best reading on screen now: a saved grid, else the biggest grid learned from its headers.
+  const lookNow = async (pressed) => {
+    let best = null;
+    for (const table of saved) {
+      const read = await readWith(table);
+      if (!read) continue;
+      const q = quality(table, read);
+      if (!best || q.score > best.q.score) best = { table, read, q, learned: table === learnedBefore?.table, pressed };
+    }
+    if (best && !weak(best.q)) return best;
     const table = await learnGridInTab(tabId);
     const read = table && (await readWith(table));
-    if (!read) return null;
-    note(`"${screen.entity}": learned the grid on screen: ${read.rows.length} rows, columns ${table.columns.map((c) => c.key).join(', ')}`);
-    if (ctx.crmId && screen.id && !screen.adHoc) await saveLearnedGrid(ctx.crmId, screen.id, table);
-    return { table, read, learned: true, pressed };
+    if (read) {
+      const q = quality(table, read);
+      if (!best || q.score > best.q.score) best = { table, read, q, learned: true, fresh: true, pressed };
+    }
+    return best;
   };
-  const onScreen = await learn(null);
-  if (onScreen) return onScreen;
-  const pressed = (await inFrames(tabId, () => window.__crmRuntime?.pressLoader?.() ?? null)).map((f) => f.result).find(Boolean) ?? null;
-  if (!pressed) {
-    note(`"${screen.entity}": no data grid and no Search button on screen`);
-    return null;
+  let pressed = pressFirst ? await press("to load this store's data") : null;
+  let best = await lookNow(pressed);
+  if (weak(best?.q) && !pressed) {
+    if (best) note(`"${screen.entity}": the grid on screen looks unloaded (${best.q.rows} rows, ${Math.round(best.q.fill * 100)}% of the columns filled)`);
+    else if (saved.length) note(`"${screen.entity}": the saved grid shows no rows yet`);
+    pressed = await press('to load the data');
+    if (pressed) {
+      const after = await lookNow(pressed);
+      if (after && (!best || after.q.score > best.q.score)) best = after;
+    } else if (!best) note(`"${screen.entity}": no data grid and no Search button on screen`);
   }
-  note(`"${screen.entity}": pressed "${pressed.text}" to load the data`);
-  await settleTab(tabId);
-  for (const table of saved) {
-    const read = await readWith(table);
-    if (read) return { table, read, learned: false, pressed: pressed.text };
+  if (!best) return null;
+  if (best.fresh) {
+    note(`"${screen.entity}": learned the grid on screen: ${best.q.rows} rows, columns ${best.table.columns.map((c) => c.key).join(', ')}`);
+    if (ctx.crmId && screen.id && !screen.adHoc) await saveLearnedGrid(ctx.crmId, screen.id, best.table);
   }
-  return learn(pressed.text);
+  return { table: best.table, read: best.read, learned: best.learned, pressed: best.pressed };
+}
+
+// A short account of what is on a tab, for the log when a screen comes out
+// wrong (and for "Describe this tab" in the capture window).
+async function describeTab(tabId, { full = false } = {}) {
+  const frames = (await inFrames(tabId, () => window.__crmRuntime?.describePage?.() ?? null)).filter((f) => f.result).map((f) => ({ frameId: f.frameId, ...f.result }));
+  const lines = [];
+  for (const f of frames) {
+    if (!full && !f.grids.length && !f.buttons.length) continue;
+    lines.push(`frame ${f.frameId}${f.top ? ' (top)' : ''}: ${f.url} — "${f.title}" ${f.size}${f.headings.length ? ` — headings: ${f.headings.join(' / ')}` : ''}`);
+    for (const g of f.grids.slice(0, full ? 6 : 3)) lines.push(`  grid${g.calendar ? ' (calendar)' : ''}: ${g.count} rows, columns ${g.headers.filter(Boolean).slice(0, 12).join(' | ')}${g.headers.length > 12 ? ' …' : ''} — first row: ${g.sample.slice(0, 6).join(' | ')} — ${g.container}`);
+    if (f.loader) lines.push(`  search button: "${f.loader}"`);
+    if (f.stores.length) lines.push(`  store switcher candidates: ${f.stores.join('; ')}`);
+    if (f.selects.length) lines.push(`  selects: ${f.selects.slice(0, full ? 20 : 6).join('; ')}`);
+    if (f.buttons.length) lines.push(`  buttons/menu entries: ${f.buttons.slice(0, full ? 60 : 25).join(', ')}`);
+    if (full) lines.push(`  text: ${f.text}`);
+  }
+  return lines.length ? lines : ['(nothing readable on the tab: no frames answered)'];
 }
 
 // ----------------------------------------- records that open in place
@@ -841,7 +884,8 @@ async function captureScreens(run, ctx, screens) {
         const stuck = await reachScreen(tab.id, screen, note);
         if (stuck) {
           stats.failed++;
-          note(`Could not reach "${screen.entity}": "${stuck}" was not found on screen`);
+          note(`Could not reach "${screen.entity}": "${stuck}" was not found on screen. What the tab shows:`);
+          run.data(await describeTab(tab.id));
           return;
         }
         await walkScreenPerStore(run, ctx, screen, tab.id, queue, { kind });
@@ -867,7 +911,8 @@ async function walkScreen(run, ctx, screen, tabId, queue, { kind = null, store =
   const startUrl = screen.url || ctx.crm.startUrl;
   const first = await loadGrid(tabId, ctx, screen, { note, pressFirst });
   if (!first) {
-    note(`"${screen.entity}": no data grid on screen (nothing to read)`);
+    note(`"${screen.entity}": no data grid on screen (nothing to read). What the tab shows:`);
+    data(await describeTab(tabId));
     return;
   }
   const { table } = first;
