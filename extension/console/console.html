@@ -11,7 +11,7 @@
       <header class="console-head">
         <div>
           <h1>CRM Capture</h1>
-          <p class="muted">Pick a CRM and capture every record it has. The CRM pages being read load in the tab next to this one; every value read is written to the log below and saved to today's CSV files.</p>
+          <p class="muted">Two ways to capture. <b>Capture whole CRM</b> replays the CRM's saved layout: menus, Search buttons, lists, records. <b>Capture this tab</b> is for screens the layout can't reach: open the list yourself in the CRM (menus, filters, press Search), then capture what is on screen; it is read page after page in that tab. Every value read goes to the log below and to today's CSV files.</p>
         </div>
         <div class="row">
           <select id="crm-select" title="A CRM with a bundled layout"></select>
@@ -24,9 +24,21 @@
         <div>
           <h2 id="site-name">No CRM tab open</h2>
           <p id="site-text" class="muted">Open a CRM in another tab; this window follows the tab you are using.</p>
+          <p id="site-grid" class="muted"></p>
         </div>
         <div class="row">
           <button id="site-capture" type="button" class="primary" hidden>Capture whole CRM</button>
+          <select id="here-kind" title="What the rows are" hidden>
+            <option value="">auto-detect kind</option>
+            <option value="customers">customers / leads</option>
+            <option value="users">users / employees</option>
+            <option value="deals">deals</option>
+            <option value="appointments">appointments</option>
+            <option value="tasks">tasks</option>
+            <option value="vehicles">vehicles</option>
+            <option value="other">other</option>
+          </select>
+          <button id="here-capture" type="button" hidden title="Open the list in the CRM yourself (menus, filters, Search), then capture what is on screen, page after page">Capture this tab</button>
         </div>
       </section>
 

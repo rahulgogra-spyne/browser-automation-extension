@@ -78,6 +78,7 @@ const handlers = {
     const page = crm && findPageType(crm.crm, tab.url);
     return {
       site: {
+        tabId: tab.id,
         url: tab.url,
         host: new URL(tab.url).host,
         name: crm ? crm.crm.name : detectSite(tab.url),
@@ -90,6 +91,24 @@ const handlers = {
     };
   },
   openConsole: async () => ({ windowId: await ensureConsoleWindow() }),
+  // The list on the CRM tab the user set up (menus clicked, Search pressed):
+  // its grid is learned and read page after page, in that tab.
+  captureHere,
+  // Whether the CRM tab shows a data grid now, for the capture window.
+  tabGrid: async ({ tabId }) => {
+    const tab = await chrome.tabs.get(tabId).catch(() => null);
+    if (!tab || !/^https?:/i.test(tab.url || '')) return { grid: null };
+    const found = (await inFrames(tabId, () => {
+      const rt = window.__crmRuntime;
+      const t = rt?.describeTable?.();
+      return t && rt.isDataGrid(t.spec) ? { headers: t.spec.headers, count: t.count } : null;
+    }))
+      .map((f) => f.result)
+      .filter(Boolean)
+      .sort((a, b) => b.count - a.count)[0];
+    const loader = (await inFrames(tabId, () => window.__crmRuntime?.describeLoader?.() ?? null)).map((f) => f.result).find(Boolean) ?? null;
+    return { grid: found ? { ...found, dataset: guessDataset(found.headers) } : null, loader: loader?.text ?? null };
+  },
   writeDay,
   status,
   listDays: async () => ({ days: await listDays() }),
@@ -159,7 +178,7 @@ function startRun({ crmId, name, phase }) {
     for (const line of lines) stats.log.push(`            ${line}`);
     if (stats.log.length > MAX_LOG_LINES) stats.log.splice(0, stats.log.length - MAX_LOG_LINES);
   };
-  return { stats, note, data, seen: new Set(), pending: [], publish: () => chrome.storage.session.set({ bulk: stats }) };
+  return { stats, note, data, seen: new Set(), grids: new Set(), pending: [], publish: () => chrome.storage.session.set({ bulk: stats }) };
 }
 
 const cut = (value) => {
@@ -461,6 +480,149 @@ async function replayPathInTab(tabId, path) {
   return null;
 }
 
+// ----------------------------------------- loading and learning a grid
+//
+// A screen's saved grid may read nothing: the screen shows no rows until a
+// search is run, or the mapping caught the wrong table (a date picker). Then
+// the Search/Find/Go button on screen is pressed, and the biggest grid with
+// column headers is learned on the spot, its columns named from the headers.
+// What was learned is kept (chrome.storage.local) for the next run.
+
+// Column headers -> row keys. Common captions map to the standard keys;
+// anything else becomes a slug of the caption.
+const HEADER_KEYS = [
+  [/^(full )?name$|^customer( name)?$|^contact( name)?$|^prospect( name)?$|^client$/i, 'full_name'],
+  [/^first( name)?$/i, 'first_name'], [/^last( name)?$|^surname$/i, 'last_name'],
+  [/^e-?mail( address)?$/i, 'email'],
+  [/^(cell|mobile|cell phone|mobile phone)$/i, 'phone_mobile'], [/^(home|home phone)$/i, 'phone_home'], [/^(work|work phone|business phone|office)$/i, 'phone_work'], [/^(phone|phone number|telephone|tel)$/i, 'phone'],
+  [/^(company|dealer|dealership|organization|organisation|account)$/i, 'company'], [/^(title|job title|position|role)$/i, 'job_title'],
+  [/^(address|street|address 1)$/i, 'address'], [/^city$/i, 'city'], [/^(state|province|st)$/i, 'state'], [/^(zip|zip code|postal code|postcode)$/i, 'zip'],
+  [/^(salesperson|sales person|sales rep|rep|owner|assigned to|assigned|agent|bdc)$/i, 'salesperson'],
+  [/^(source|lead source)$/i, 'lead_source'], [/^(status|lead status|stage)$/i, 'lead_status'],
+  [/^(year|yr|model year)$/i, 'vehicle_year'], [/^make$/i, 'vehicle_make'], [/^model$/i, 'vehicle_model'], [/^vin$/i, 'vin'], [/^(stock|stock ?#|stock no\.?|stock number)$/i, 'stock_number'],
+  [/^(price|retail|retail price|list price|asking)$/i, 'price'], [/^(mileage|miles|odometer)$/i, 'mileage'],
+  [/^(date|created|created on|date created|added)$/i, 'date'], [/^(notes?|comments?)$/i, 'notes'],
+  [/^(login|user ?name|user id|userid)$/i, 'login'], [/^(last login|last signed in)$/i, 'last_login'], [/^(department|dept)$/i, 'department'],
+];
+const slugKey = (header) => header.toLowerCase().replace(/#/g, ' number ').replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 40);
+function columnsFromHeaders(headers) {
+  const used = new Set();
+  const columns = [];
+  headers.forEach((header, index) => {
+    const caption = String(header ?? '').trim();
+    if (!caption || /^(image|photo|pic|select|actions?|)$/i.test(caption)) return;
+    let key = HEADER_KEYS.find(([re]) => re.test(caption))?.[1] ?? slugKey(caption);
+    if (!key) return;
+    if (used.has(key)) key = `${key}_${index + 1}`;
+    used.add(key);
+    columns.push({ index, key });
+  });
+  return columns;
+}
+
+// Which kind of data a grid holds, from its headers.
+function guessDataset(headers) {
+  const h = headers.map((x) => String(x).toLowerCase());
+  const has = (re) => h.some((x) => re.test(x));
+  if (has(/^vin$|^stock|^mileage|^odometer/)) return 'vehicles';
+  if (has(/login|user ?name|last login|permission/)) return 'users';
+  if (has(/^(deal|opportunity|quote)|amount|close date/)) return 'deals';
+  if (has(/^(appointment|appt)|^start|^end time/)) return 'appointments';
+  if (has(/^(task|due|due date|priority)/)) return 'tasks';
+  if (has(/e-?mail|phone|cell|mobile|^name$|customer|contact|prospect|lead/)) return 'customers';
+  return 'other';
+}
+
+const learnedKey = (crmId, screenId) => `${crmId}:${screenId}`;
+async function getLearnedGrid(crmId, screenId) {
+  const { learnedGrids = {} } = await chrome.storage.local.get('learnedGrids');
+  return learnedGrids[learnedKey(crmId, screenId)] ?? null;
+}
+async function saveLearnedGrid(crmId, screenId, table) {
+  const { learnedGrids = {} } = await chrome.storage.local.get('learnedGrids');
+  learnedGrids[learnedKey(crmId, screenId)] = { table, learnedAt: new Date().toISOString() };
+  await chrome.storage.local.set({ learnedGrids });
+}
+
+// Learns the grid on screen now: the frame with the most data rows wins.
+// { container, row, headers, offset, columns } or null.
+async function learnGridInTab(tabId) {
+  const found = (await inFrames(tabId, () => {
+    const rt = window.__crmRuntime;
+    const t = rt?.describeTable?.();
+    return t && rt.isDataGrid(t.spec) ? { spec: t.spec, count: t.count } : null;
+  }))
+    .map((f) => f.result)
+    .filter(Boolean)
+    .sort((a, b) => b.count - a.count)[0];
+  if (!found) return null;
+  return { ...found.spec, columns: columnsFromHeaders(found.spec.headers) };
+}
+
+// Replays a screen's load steps (after its path): { click: { css?, text } },
+// { fill: { css?, label?, value, enter? } }, { wait: ms }. The caption of a
+// step that could not be done, or null.
+async function replayLoadSteps(tabId, steps = []) {
+  for (const step of steps) {
+    if (step.wait) {
+      await new Promise((r) => setTimeout(r, step.wait));
+      continue;
+    }
+    if (step.fill) {
+      const done = (await inFrames(tabId, (spec) => window.__crmRuntime?.fillField?.(spec) ?? false, [step.fill])).some((f) => f.result);
+      if (!done) return `fill ${step.fill.label || step.fill.css}`;
+      continue;
+    }
+    if (step.click) {
+      const done = (await inFrames(tabId, (spec) => window.__crmRuntime?.pressNav?.(spec, { toggle: true }) ?? false, [step.click])).some((f) => f.result);
+      if (!done) return `click ${step.click.text || step.click.css}`;
+      await settleTab(tabId);
+    }
+  }
+  return null;
+}
+
+// Reads the grid of a screen in a tab. The saved grid first (a learned one
+// from a previous run before it); when that reads nothing, the Search button
+// on screen is pressed and the grid learned afresh. Returns { table, read,
+// learned, pressed } with read = { rows, signature }, or null.
+async function loadGrid(tabId, ctx, screen, { note }) {
+  const readWith = async (table) => (await inFrames(tabId, (spec) => window.__crmRuntime?.readTable?.(spec) ?? null, [table])).map((f) => f.result).find((r) => r?.rows?.length) ?? null;
+  const usable = (table) => table && (table.columns?.length ?? 0) > 0 && !/datepicker|calendar/i.test(table.container || '') && !(table.headers?.length >= 5 && table.headers.every((h) => /^(su|mo|tu|we|th|fr|sa|s|m|t|w|f)$/i.test(h)));
+  const learnedBefore = ctx.crmId && screen.id ? await getLearnedGrid(ctx.crmId, screen.id) : null;
+  const saved = [learnedBefore?.table, screen.table].filter(usable);
+  for (const table of saved) {
+    const read = await readWith(table);
+    if (read) return { table, read, learned: table === learnedBefore?.table, pressed: null };
+  }
+  if (saved.length) note(`"${screen.entity}": the grid shows no rows yet`);
+  else if (screen.table) note(`"${screen.entity}": the saved grid (${(screen.table.headers ?? []).slice(0, 7).join(', ')}) is not a data grid`);
+  // A data grid already on screen (the user ran the search) is learned as is;
+  // otherwise Search / Find / Go / Show is pressed first, then it is learned.
+  const learn = async (pressed) => {
+    const table = await learnGridInTab(tabId);
+    const read = table && (await readWith(table));
+    if (!read) return null;
+    note(`"${screen.entity}": learned the grid on screen: ${read.rows.length} rows, columns ${table.columns.map((c) => c.key).join(', ')}`);
+    if (ctx.crmId && screen.id && !screen.adHoc) await saveLearnedGrid(ctx.crmId, screen.id, table);
+    return { table, read, learned: true, pressed };
+  };
+  const onScreen = await learn(null);
+  if (onScreen) return onScreen;
+  const pressed = (await inFrames(tabId, () => window.__crmRuntime?.pressLoader?.() ?? null)).map((f) => f.result).find(Boolean) ?? null;
+  if (!pressed) {
+    note(`"${screen.entity}": no data grid and no Search button on screen`);
+    return null;
+  }
+  note(`"${screen.entity}": pressed "${pressed.text}" to load the data`);
+  await settleTab(tabId);
+  for (const table of saved) {
+    const read = await readWith(table);
+    if (read) return { table, read, learned: false, pressed: pressed.text };
+  }
+  return learn(pressed.text);
+}
+
 // ----------------------------------------- records that open in place
 //
 // A screen's rows may hold no link: its detail layout reads the drawer or
@@ -533,133 +695,33 @@ async function openRowPage(tabId, screen, index) {
 }
 
 // Screens of a click-driven CRM (one address for everything): each is the
-// path of clicks that leads to it from the start page plus the grid found
-// there. Capturing one replays the path in a work tab, reads the grid,
-// presses "next" and reads again.
+// path of clicks that leads to it from the start page, optional load steps
+// (fill a filter, press Search) and the grid found there. Capturing one
+// replays the path in a work tab, loads the grid, reads it, presses "next"
+// and reads again. A screen whose grid is the one an earlier screen already
+// read (the same grid mapped under several menu detours) is skipped.
 async function captureScreens(run, ctx, screens) {
-  const { stats, note, data } = run;
+  const { stats, note } = run;
   stats.lists += screens.length;
   for (const screen of screens) {
     if (cancelRequested) break;
     const kind = datasetOfPageType(screen, ctx.crm);
-    const recordType = screen.recordPageType ? ctx.crm.pageTypes.find((pt) => pt.id === screen.recordPageType) : null;
     const startUrl = screen.url || ctx.crm.startUrl;
     const queue = [];
-    stats.phase = screen.path.length ? `Opening "${screen.entity}" (${kind}) by clicking ${screen.path.map((s) => s.label).join(' > ')}` : `Opening "${screen.entity}" (${kind})`;
+    stats.phase = screen.path?.length ? `Opening "${screen.entity}" (${kind}) by clicking ${screen.path.map((s) => s.label).join(' > ')}` : `Opening "${screen.entity}" (${kind})`;
     note(stats.phase);
     await run.publish();
     try {
       await withBackgroundTab(startUrl, async (tab) => {
-        const stuck = await replayPathInTab(tab.id, screen.path);
+        const stuck = await replayPathInTab(tab.id, screen.path ?? []);
         if (stuck) {
           stats.failed++;
           note(`Could not reach "${screen.entity}": "${stuck}" was not found on screen`);
           return;
         }
-        let lastSignature = null;
-        // A grid with no pager may grow as it is scrolled ("Show more", infinite scroll): all of it first.
-        const grown = await inFrames(
-          tab.id,
-          async (spec) => {
-            const rt = window.__crmRuntime;
-            if (!rt?.tableRows?.(spec) || rt.hasNext({ near: spec.container })) return 0;
-            return rt.expandAll({ rows: `${spec.container} ${spec.row ? spec.row.replace(/^:scope\s*>?\s*/, '') : 'tr'}` });
-          },
-          [screen.table],
-        );
-        const rounds = Math.max(0, ...grown.map((f) => f.result || 0));
-        if (rounds > 1) note(`"${screen.entity}": expanded the grid in place (${rounds} rounds of "show more"/scrolling)`);
-        for (let pageNo = 0; pageNo < MAX_PAGES_PER_LIST && !cancelRequested; pageNo++) {
-          const read = (await inFrames(tab.id, (spec) => window.__crmRuntime?.readTable?.(spec) ?? null, [screen.table])).map((f) => f.result).find((r) => r?.rows?.length);
-          if (!read) {
-            if (pageNo === 0) note(`"${screen.entity}": no rows on screen (the grid's layout did not fit)`);
-            break;
-          }
-          if (read.signature === lastSignature) break; // "next" changed nothing: the last page
-          lastSignature = read.signature;
-          stats.pages++;
-          let taken = 0;
-          let previous = null; // the fields the panel showed for the row before
-          const toOpen = []; // rows whose record page only a click reaches
-          for (const [index, row] of read.rows.entries()) {
-            if (cancelRequested) break;
-            const fields = row.fields ?? {};
-            if (!Object.keys(fields).length) continue;
-            const match = recordType && row.link ? matchesType(recordType, row.link) : null;
-            if (match) {
-              // The row opens a mapped page: that page is captured (it has everything the row shows and more).
-              const id = `${recordType.id}:${match[1] || row.link}`;
-              if (run.seen.has(id)) continue;
-              run.seen.add(id);
-              queue.push({ url: row.link, title: rowTitle(fields), recordTypeId: recordType.id, recordId: match[1] ?? '' });
-              stats.found++;
-              continue;
-            }
-            const id = `${screen.id}:${JSON.stringify(fields)}`;
-            if (run.seen.has(id)) continue;
-            run.seen.add(id);
-            if (recordType && screen.rowOpen) {
-              toOpen.push({ index, title: rowTitle(fields) });
-              continue;
-            }
-            let record = { fields: normalizeFields(fields), collections: {} };
-            let problem = '';
-            if (screen.detail) {
-              stats.phase = `Reading "${screen.entity}" (${kind}), page ${pageNo + 1}: opening ${rowTitle(fields) || `row ${index + 1}`}`;
-              await run.publish();
-              const result = await readRowInPlace(tab.id, ctx.crm, screen, index, previous);
-              if (Object.keys(result.fields).length) previous = result.fields;
-              const verdict = assessExtraction(screen.detail, result);
-              record = { fields: normalizeFields({ ...fields, ...result.fields }), collections: nonEmpty(result.collections) };
-              if (!verdict.ok) {
-                problem = describeProblems(verdict);
-                stats.partial++;
-              }
-            }
-            run.pending.push({ fields: record.fields, collections: record.collections, pageUrl: startUrl, dataset: kind });
-            taken++;
-            stats.found++;
-            stats.total++;
-            stats.captured++;
-            stats.byKind[kind] = (stats.byKind[kind] ?? 0) + 1;
-            const name = rowTitle(record.fields) || `row ${index + 1}`;
-            const messages = Object.values(record.collections).reduce((n, l) => n + l.length, 0);
-            stats.recent.unshift({ name, kind, fields: Object.keys(record.fields).length, messages, url: startUrl, partial: Boolean(problem) });
-            if (stats.recent.length > 60) stats.recent.pop();
-            note(`Captured ${name} (${kind}) from "${screen.entity}" page ${pageNo + 1}: ${Object.keys(record.fields).length} fields, ${messages} messages${problem ? ` — the panel did not fully fit (${problem})` : ''}`);
-            data(describeRecord(record.fields, record.collections));
-            if (run.pending.length >= 10) await flushRun(run, ctx);
-            await run.publish();
-          }
-          // Rows that open their record's page by script: note each address, come back.
-          let lost = false;
-          for (const { index, title } of toOpen) {
-            if (cancelRequested) break;
-            stats.phase = `Reading "${screen.entity}" (${kind}), page ${pageNo + 1}: finding the page of ${title || `row ${index + 1}`}`;
-            await run.publish();
-            const url = await openRowPage(tab.id, screen, index);
-            const opened = url && matchesType(recordType, url);
-            if (opened) {
-              const id = `${recordType.id}:${opened[1] || url}`;
-              if (!run.seen.has(id)) {
-                run.seen.add(id);
-                queue.push({ url, title, recordTypeId: recordType.id, recordId: opened[1] ?? '' });
-                stats.found++;
-              }
-            } else note(`${title || `Row ${index + 1}`}: clicking it did not open a ${recordType.entity || 'record'} page`);
-            if (url && !(await returnToPage(tab.id, screen, startUrl, pageNo, read.signature))) {
-              note(`Could not get back to page ${pageNo + 1} of "${screen.entity}"; the rest of the list is skipped`);
-              lost = true;
-              break;
-            }
-          }
-          if (lost) break;
-          stats.phase = `Reading "${screen.entity}" (${kind}), page ${pageNo + 1}: ${taken} rows`;
-          note(stats.phase);
-          await run.publish();
-          if (run.pending.length >= 10) await flushRun(run, ctx);
-          if (!(await pressListNext(tab.id, screen.table.container))) break;
-        }
+        const undone = await replayLoadSteps(tab.id, screen.load ?? []);
+        if (undone) note(`"${screen.entity}": the load step "${undone}" could not be done; reading what is on screen`);
+        await walkScreen(run, ctx, screen, tab.id, queue, { kind });
       });
     } catch (error) {
       stats.failed++;
@@ -670,6 +732,179 @@ async function captureScreens(run, ctx, screens) {
       note(`${queue.length} ${kind} to capture from the pages the rows of "${screen.entity}" open`);
       await captureItems(run, ctx, queue);
     }
+  }
+}
+
+// Reads a screen's grid in tabId page after page: each row is saved as a
+// record of its kind, or queued (rows that link to a mapped record page),
+// or opened in place / by click when the screen says so.
+async function walkScreen(run, ctx, screen, tabId, queue, { kind = null } = {}) {
+  const { stats, note, data } = run;
+  const recordType = screen.recordPageType ? ctx.crm.pageTypes.find((pt) => pt.id === screen.recordPageType) : null;
+  const startUrl = screen.url || ctx.crm.startUrl;
+  const first = await loadGrid(tabId, ctx, screen, { note });
+  if (!first) {
+    note(`"${screen.entity}": no data grid on screen (nothing to read)`);
+    return;
+  }
+  const { table } = first;
+  if (!kind) {
+    kind = guessDataset(table.headers ?? []);
+    note(`"${screen.entity}": the grid looks like ${kind} (${(table.headers ?? []).filter(Boolean).slice(0, 8).join(', ')})`);
+  }
+  const gridId = `${kind}|${table.container}|${(table.headers ?? []).join('|')}|${first.read.signature}`;
+  if (run.grids.has(gridId)) {
+    note(`"${screen.entity}": the same grid was already read under another screen; skipped`);
+    return;
+  }
+  run.grids.add(gridId);
+  const readNow = async () => (await inFrames(tabId, (spec) => window.__crmRuntime?.readTable?.(spec) ?? null, [table])).map((f) => f.result).find((r) => r?.rows?.length) ?? null;
+  // A grid with no pager may grow as it is scrolled ("Show more", infinite scroll): all of it first.
+  const grown = await inFrames(
+    tabId,
+    async (spec) => {
+      const rt = window.__crmRuntime;
+      if (!rt?.tableRows?.(spec) || rt.hasNext({ near: spec.container })) return 0;
+      return rt.expandAll({ rows: `${spec.container} ${spec.row ? spec.row.replace(/^:scope\s*>?\s*/, '') : 'tr'}` });
+    },
+    [table],
+  );
+  const rounds = Math.max(0, ...grown.map((f) => f.result || 0));
+  if (rounds > 1) note(`"${screen.entity}": expanded the grid in place (${rounds} rounds of "show more"/scrolling)`);
+  let lastSignature = null;
+  for (let pageNo = 0; pageNo < MAX_PAGES_PER_LIST && !cancelRequested; pageNo++) {
+    const read = pageNo === 0 && rounds <= 1 ? first.read : await readNow();
+    if (!read) break;
+    if (read.signature === lastSignature) break; // "next" changed nothing: the last page
+    lastSignature = read.signature;
+    stats.pages++;
+    let taken = 0;
+    let previous = null; // the fields the panel showed for the row before
+    const toOpen = []; // rows whose record page only a click reaches
+    for (const [index, row] of read.rows.entries()) {
+      if (cancelRequested) break;
+      const fields = row.fields ?? {};
+      if (!Object.keys(fields).length) continue;
+      const match = recordType && row.link ? matchesType(recordType, row.link) : null;
+      if (match) {
+        // The row opens a mapped page: that page is captured (it has everything the row shows and more).
+        const id = `${recordType.id}:${match[1] || row.link}`;
+        if (run.seen.has(id)) continue;
+        run.seen.add(id);
+        queue.push({ url: row.link, title: rowTitle(fields), recordTypeId: recordType.id, recordId: match[1] ?? '' });
+        stats.found++;
+        continue;
+      }
+      const id = `${screen.id}:${JSON.stringify(fields)}`;
+      if (run.seen.has(id)) continue;
+      run.seen.add(id);
+      if (recordType && screen.rowOpen) {
+        toOpen.push({ index, title: rowTitle(fields) });
+        continue;
+      }
+      let record = { fields: normalizeFields(fields), collections: {} };
+      let problem = '';
+      if (screen.detail) {
+        stats.phase = `Reading "${screen.entity}" (${kind}), page ${pageNo + 1}: opening ${rowTitle(fields) || `row ${index + 1}`}`;
+        await run.publish();
+        const result = await readRowInPlace(tabId, ctx.crm, { ...screen, table }, index, previous);
+        if (Object.keys(result.fields).length) previous = result.fields;
+        const verdict = assessExtraction(screen.detail, result);
+        record = { fields: normalizeFields({ ...fields, ...result.fields }), collections: nonEmpty(result.collections) };
+        if (!verdict.ok) {
+          problem = describeProblems(verdict);
+          stats.partial++;
+        }
+      }
+      run.pending.push({ fields: record.fields, collections: record.collections, pageUrl: row.link || startUrl, dataset: kind });
+      taken++;
+      stats.found++;
+      stats.total++;
+      stats.captured++;
+      stats.byKind[kind] = (stats.byKind[kind] ?? 0) + 1;
+      const name = rowTitle(record.fields) || `row ${index + 1}`;
+      const messages = Object.values(record.collections).reduce((n, l) => n + l.length, 0);
+      stats.recent.unshift({ name, kind, fields: Object.keys(record.fields).length, messages, url: row.link || startUrl, partial: Boolean(problem) });
+      if (stats.recent.length > 60) stats.recent.pop();
+      note(`Captured ${name} (${kind}) from "${screen.entity}" page ${pageNo + 1}: ${Object.keys(record.fields).length} fields, ${messages} messages${problem ? ` — the panel did not fully fit (${problem})` : ''}`);
+      data(describeRecord(record.fields, record.collections));
+      if (run.pending.length >= 10) await flushRun(run, ctx);
+      await run.publish();
+    }
+    // Rows that open their record's page by script: note each address, come back.
+    let lost = false;
+    for (const { index, title } of toOpen) {
+      if (cancelRequested) break;
+      stats.phase = `Reading "${screen.entity}" (${kind}), page ${pageNo + 1}: finding the page of ${title || `row ${index + 1}`}`;
+      await run.publish();
+      const url = await openRowPage(tabId, { ...screen, table }, index);
+      const opened = url && matchesType(recordType, url);
+      if (opened) {
+        const id = `${recordType.id}:${opened[1] || url}`;
+        if (!run.seen.has(id)) {
+          run.seen.add(id);
+          queue.push({ url, title, recordTypeId: recordType.id, recordId: opened[1] ?? '' });
+          stats.found++;
+        }
+      } else note(`${title || `Row ${index + 1}`}: clicking it did not open a ${recordType.entity || 'record'} page`);
+      if (url && !(await returnToPage(tabId, { ...screen, table }, startUrl, pageNo, read.signature))) {
+        note(`Could not get back to page ${pageNo + 1} of "${screen.entity}"; the rest of the list is skipped`);
+        lost = true;
+        break;
+      }
+    }
+    if (lost) break;
+    stats.phase = `Reading "${screen.entity}" (${kind}), page ${pageNo + 1}: ${taken} rows`;
+    note(stats.phase);
+    await run.publish();
+    if (run.pending.length >= 10) await flushRun(run, ctx);
+    if (!(await pressListNext(tabId, table.container))) break;
+  }
+}
+
+// Captures the list shown on the CRM tab the user prepared: they clicked
+// through the menus and pressed Search with the filters they want; the grid
+// on screen is learned (no AI) and read page after page in that very tab.
+// Rows that link into a mapped record page are captured from their pages.
+async function captureHere({ tabId, dataset = null }) {
+  if (bulkInProgress) throw new Error(`Already capturing ${bulkInProgress}. Wait for it or cancel it.`);
+  const tab = await chrome.tabs.get(tabId).catch(() => null);
+  if (!tab || !/^https?:/i.test(tab.url || '')) throw new Error('Open the CRM list in a tab first.');
+  const settings = await getSettings();
+  const config = await getCrmConfig();
+  const known = findCrm(config, tab.url);
+  const host = new URL(tab.url).host;
+  const crm = known?.crm ?? { name: detectSite(tab.url), match: { hosts: [host] }, pageTypes: [], startUrl: tab.url };
+  const crmId = known?.id ?? host.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase();
+  const kind = datasetById(dataset)?.id ?? null;
+  // Rows linking to a mapped record page of this kind are read from their pages.
+  const recordType = crm.pageTypes.find((pt) => pt.role === 'record' && (!kind || datasetOfPageType(pt, crm) === kind)) ?? null;
+  const screen = { id: `tab:${new URL(tab.url).pathname}`, entity: tab.title || 'this tab', dataset: kind, path: [], url: tab.url, table: null, adHoc: true, recordPageType: recordType?.id };
+  bulkInProgress = `${crm.name} (this tab)`;
+  cancelRequested = false;
+  await ensureConsoleWindow();
+  const run = startRun({ crmId, name: `${crm.name} — the list on the open tab`, phase: 'Reading the grid on the tab…' });
+  run.note(`Capturing the list on ${tab.url}`);
+  await run.publish();
+  const keepAlive = setInterval(() => chrome.runtime.getPlatformInfo(), 20_000);
+  const ctx = { crmId, crm, settings };
+  try {
+    const queue = [];
+    await inject(tab.id, ['content/crm-runtime.js']);
+    await walkScreen(run, ctx, screen, tab.id, queue, { kind });
+    await flushRun(run, ctx);
+    if (queue.length) {
+      run.note(`${queue.length} record(s) to capture from the pages the rows open`);
+      await captureItems(run, ctx, queue);
+    }
+    return await finishRun(run, ctx);
+  } catch (error) {
+    await finishRun(run, ctx, error);
+    throw error;
+  } finally {
+    clearInterval(keepAlive);
+    bulkInProgress = null;
+    await endJob();
   }
 }
 

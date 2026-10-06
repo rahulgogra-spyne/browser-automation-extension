@@ -15,7 +15,7 @@
 // A selector reaches into a web component's shadow root with " >>> ":
 //   "records-record-layout >>> div.slds-form-element > span"
 (() => {
-  const RUNTIME_VERSION = 3;
+  const RUNTIME_VERSION = 4;
   if (window.__crmRuntime?.version >= RUNTIME_VERSION) return;
 
   const STABLE_ATTRS = ['data-testid', 'data-test', 'data-qa', 'data-field', 'data-key', 'data-name', 'data-label', 'name', 'aria-label'];
@@ -1193,6 +1193,82 @@
     return true;
   }
 
+  // ------------------------------------------- loading the data on screen
+  //
+  // Many CRM list screens show nothing until a search is run: a Search / Find
+  // / Go / Show button beside filter fields. findLoader() finds such a button
+  // (never one that creates, edits or deletes), pressLoader() presses it,
+  // fillField() types a value into a filter field named by selector or label.
+
+  const LOADER_CAPTION = /^(search|find|go|apply|apply filters?|show|show all|show results|view|view all|view results|load|load all|load results|run|run search|run report|filter|refresh|submit|get results|results|list|list all|display|display all|retrieve|fetch|query|ok)$/i;
+  const loaderText = (el) => tabCaption(el.tagName === 'INPUT' ? el.value || el.getAttribute('aria-label') || el.getAttribute('title') || '' : navText(el));
+  const nearInputs = (el) => {
+    for (let node = el, up = 0; node && node !== document.body && up < 7; node = parentOf(node), up++) {
+      if (node.tagName === 'FORM' || findEverywhere(node, 'input:not([type="hidden"]):not([type="submit"]):not([type="button"]), select, textarea').some(isVisible)) return true;
+    }
+    return false;
+  };
+  function findLoader() {
+    const candidates = findEverywhere(document, 'button, input[type="submit"], input[type="button"], [role="button"], a')
+      .filter((el) => isVisible(el) && !el.disabled && el.getAttribute('aria-disabled') !== 'true' && !inEditor(el))
+      .filter((el) => LOADER_CAPTION.test(loaderText(el)) || /(^|[\s_-])(search|magnifier|magnifying)([\s_-]|$)/i.test(`${el.className} ${[...el.children].map((c) => c.className).join(' ')}`))
+      .filter((el) => !deepClosest(el, 'tr, [role="row"], [role="dialog"] [role="row"]')); // not a row's own button
+    if (!candidates.length) return null;
+    // A button beside filter fields first, then a "Search" over a "Go".
+    const score = (el) => (nearInputs(el) ? 10 : 0) + (/^search|^find|^show|^load|^run|^apply|^view/i.test(loaderText(el)) ? 2 : 0) + (el.tagName === 'A' ? -1 : 0);
+    return candidates.sort((a, b) => score(b) - score(a))[0];
+  }
+  const describeLoader = () => {
+    const el = findLoader();
+    return el ? { text: loaderText(el), css: selectorFor(el) } : null;
+  };
+  function pressLoader() {
+    const el = findLoader();
+    if (!el) return null;
+    press(el);
+    return { text: loaderText(el) };
+  }
+
+  // Types value into the field spec names: { css } or { label }. Frameworks
+  // read the value from their own setter and from the input/change events.
+  function fillField(spec) {
+    let el = null;
+    try {
+      if (spec.css) el = findAll(spec.css).find(isVisible) ?? null;
+    } catch {
+      el = null;
+    }
+    if (!el && spec.label) {
+      const want = normLabel(spec.label);
+      el = findEverywhere(document, 'input:not([type="hidden"]), select, textarea').find((f) => isVisible(f) && (normLabel(labelFor(f)) === want || normLabel(f.getAttribute('placeholder') || '') === want || normLabel(f.getAttribute('aria-label') || '') === want || normLabel(f.name || '') === want));
+    }
+    if (!el) return false;
+    el.focus();
+    if (el.tagName === 'SELECT') {
+      const option = [...el.options].find((o) => clean(o.textContent).toLowerCase() === String(spec.value).toLowerCase() || o.value === String(spec.value));
+      if (!option) return false;
+      el.value = option.value;
+    } else {
+      const proto = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+      const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+      if (setter) setter.call(el, String(spec.value));
+      else el.value = String(spec.value);
+    }
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+    if (spec.enter) el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }));
+    return true;
+  }
+
+  // A grid whose headers are weekdays or whose box is a date picker is a
+  // calendar, not data.
+  const WEEKDAY = /^(su|mo|tu|we|th|fr|sa|sun|mon|tue|wed|thu|fri|sat|sunday|monday|tuesday|wednesday|thursday|friday|saturday|s|m|t|w|f)$/i;
+  const isDataGrid = (spec) => {
+    const headers = (spec?.headers ?? []).filter(Boolean);
+    if (/datepicker|calendar/i.test(spec?.container || '')) return false;
+    return !(headers.length >= 5 && headers.every((h) => WEEKDAY.test(h)));
+  };
+
   // Where a link-tab leads on this page (absolute), or null.
   function activatorHref(spec) {
     const el = findActivator(spec);
@@ -1533,5 +1609,10 @@
     describeClose,
     pressClose,
     shown,
+    describeLoader,
+    pressLoader,
+    fillField,
+    isDataGrid,
+    frameInfo: () => ({ url: location.href, title: document.title, top: window === window.top, rows: dataRows(document).length }),
   };
 })();

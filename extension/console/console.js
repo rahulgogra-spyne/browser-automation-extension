@@ -117,15 +117,31 @@ async function refreshSite() {
     return;
   }
   $('site-name').textContent = site.name;
+  $('here-capture').hidden = busy;
+  $('here-kind').hidden = busy;
   if (site.crmId) {
     $('site-text').textContent = `Layout v${site.version} bundled for ${(site.datasets ?? []).join(', ') || 'records'}${site.lists ? ` (${site.lists} list${site.lists > 1 ? 's' : ''})` : ' (no list mapped: the capture walks on from the page you are on)'}. ${site.role === 'record' ? 'The open tab shows a record.' : site.role === 'list' ? 'The open tab shows a list.' : ''}`;
     $('site-capture').hidden = busy;
     const select = $('crm-select');
     if (crms.some((c) => c.id === site.crmId)) select.value = site.crmId;
   } else {
-    $('site-text').textContent = `No layout is bundled for ${site.host}. Add one to config/crm-structures.json and reload the extension.`;
+    $('site-text').textContent = `No layout is bundled for ${site.host}: open its list in the tab (press Search if it needs one) and use Capture this tab.`;
     $('site-capture').hidden = true;
   }
+}
+
+// What the CRM tab shows right now: a data grid (and its size), a Search button.
+let gridProbe = { key: null, at: 0 };
+async function refreshTabGrid() {
+  if (!activeSite || busy) return ($('site-grid').textContent = '');
+  const key = `${activeSite.tabId}|${activeSite.url}`;
+  if (gridProbe.key === key && Date.now() - gridProbe.at < 10_000) return;
+  gridProbe = { key, at: Date.now() };
+  const { grid, loader } = await send({ type: 'tabGrid', tabId: activeSite.tabId }).catch(() => ({ grid: null, loader: null }));
+  if (gridProbe.key !== key) return;
+  if (grid) $('site-grid').textContent = `On this tab: a grid with ${grid.count} row${grid.count === 1 ? '' : 's'} (looks like ${grid.dataset}: ${grid.headers.filter(Boolean).slice(0, 8).join(', ')}${grid.headers.length > 8 ? '…' : ''}).`;
+  else if (loader) $('site-grid').textContent = `On this tab: no data grid yet, but a "${loader}" button. Press it in the CRM (with the filters you want), then Capture this tab.`;
+  else $('site-grid').textContent = 'On this tab: no data grid found. Open a list screen in the CRM first.';
 }
 
 async function tick() {
@@ -160,6 +176,12 @@ function start(crmId, startUrl = null) {
 
 $('capture-crm').addEventListener('click', () => start($('crm-select').value));
 $('site-capture').addEventListener('click', () => activeSite?.crmId && start(activeSite.crmId, activeSite.url));
+$('here-capture').addEventListener('click', () => {
+  if (!activeSite) return;
+  if (!confirm(`Capture the list shown on ${activeSite.host}? It is read page after page in that tab (don't use the tab meanwhile) and saved to today's CSV as it goes.`)) return;
+  $('now-note').textContent = '';
+  send({ type: 'captureHere', tabId: activeSite.tabId, dataset: $('here-kind').value || null }).catch((error) => ($('now-note').textContent = error.message));
+});
 $('cancel').addEventListener('click', () => send({ type: 'cancelCapture' }).catch(() => {}));
 $('clear').addEventListener('click', () => send({ type: 'clearJobs' }).then(tick).catch(() => {}));
 $('open-settings').addEventListener('click', () => chrome.runtime.openOptionsPage());
@@ -180,8 +202,8 @@ $('save-log').addEventListener('click', () => {
   chrome.downloads.download({ url, filename: name, saveAs: true }).finally(() => setTimeout(() => URL.revokeObjectURL(url), 60_000));
 });
 
-loadCrms().then(refreshSite);
-setInterval(refreshSite, 2000);
+loadCrms().then(refreshSite).then(refreshTabGrid);
+setInterval(() => refreshSite().then(refreshTabGrid), 2000);
 refreshToday();
 tick();
 setInterval(tick, 1000);
