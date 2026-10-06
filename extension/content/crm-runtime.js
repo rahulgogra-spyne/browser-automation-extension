@@ -15,7 +15,7 @@
 // A selector reaches into a web component's shadow root with " >>> ":
 //   "records-record-layout >>> div.slds-form-element > span"
 (() => {
-  const RUNTIME_VERSION = 13;
+  const RUNTIME_VERSION = 15;
   if (window.__crmRuntime?.version >= RUNTIME_VERSION) return;
 
   const STABLE_ATTRS = ['data-testid', 'data-test', 'data-qa', 'data-field', 'data-key', 'data-name', 'data-label', 'name', 'aria-label'];
@@ -629,18 +629,24 @@
 
   // Where an element leads: a plain link, a data-href/data-url attribute, or
   // an onclick that navigates. newTab: it would open in a new tab/window.
+  // A page address handed to a function in script: NewWindow('../x/Details.aspx?id=1', …),
+  // openPopup("customer.php?id=2"), goTo('list.asp').
+  const CALL_URL = /[\w$.]+\(\s*\\?['"]([^'"\\]*\.(?:aspx?|php|html?|jsp|do|cfm)(?:[?#][^'"\\]*)?)\\?['"]/i;
+  function scriptTarget(code) {
+    const m = code.match(ONCLICK_URL);
+    if (m) return { url: absoluteUrl(m[1]), newTab: /window\.open/.test(code) };
+    const call = code.match(CALL_URL);
+    return call ? { url: absoluteUrl(call[1].replace(/&amp;/g, '&')), newTab: true } : null;
+  }
   function linkTarget(el) {
-    if (el.tagName === 'A' && el.getAttribute('href')) {
-      return { url: absoluteUrl(el.getAttribute('href')), newTab: el.target === '_blank' };
-    }
+    const href = el.tagName === 'A' ? el.getAttribute('href') || '' : '';
+    // A real address in the href; "#" and javascript: hrefs leave it to the script.
+    if (href && !/^\s*(#|javascript:)/i.test(href)) return { url: absoluteUrl(href), newTab: el.target === '_blank' };
     for (const attr of ['data-href', 'data-url', 'data-link']) {
       const value = el.getAttribute(attr);
       if (value) return { url: absoluteUrl(value), newTab: false };
     }
-    const onclick = el.getAttribute('onclick') || '';
-    const m = onclick.match(ONCLICK_URL);
-    if (m) return { url: absoluteUrl(m[1]), newTab: /window\.open/.test(onclick) };
-    return null;
+    return scriptTarget(el.getAttribute('onclick') || '') || (/^\s*javascript:/i.test(href) ? scriptTarget(href) : null);
   }
 
   // The element that carries a link's navigation (the anchor itself, or the
@@ -959,6 +965,7 @@
   // several qualify (two menus with an "Active" entry) the one at the same
   // position among them.
   function findNav(spec) {
+    if (!spec.text && spec.css) return navPool(spec)[spec.nth || 0] || null;
     const want = tabCaption(spec.text || '').toLowerCase();
     const matches = navPool(spec).filter((el) => navText(el).toLowerCase() === want);
     return matches[spec.nth || 0] || matches[0] || null;
@@ -1026,7 +1033,13 @@
 
   const CELL_SEL = 'td, [role="gridcell"], [role="cell"]';
   const HEADER_SEL = 'th, [role="columnheader"]';
-  const directCells = (row) => [...row.children].filter((c) => c.matches(CELL_SEL));
+  const allCells = (row) => [...row.children].filter((c) => c.matches(CELL_SEL));
+  // The cells a person sees: hidden ones (ids, flags, spare columns) line up with no header.
+  const directCells = (row) => {
+    const cells = allCells(row);
+    const shown = cells.filter((c) => getComputedStyle(c).display !== 'none');
+    return shown.length >= 2 ? shown : cells;
+  };
   // A row whose cells are mostly input boxes is a search form laid out as a
   // table (criteria: "VIN #" [____] "Mileage From" [____]), not data.
   const FORM_FIELD = 'input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]):not([type="button"]):not([type="submit"]), select, textarea';
@@ -1192,18 +1205,31 @@
           if (key && value && !(key in out.fields)) out.fields[key] = value;
         }
       }
-      // A row that leads somewhere by URL (a link, or an onclick that opens one).
+      // Where a row leads by URL (a link, or script that opens one): the first, and all of them in order.
+      const links = [];
       for (const el of findEverywhere(row, 'a[href], [data-href], [data-url], [data-link], [onclick]')) {
         const target = linkTarget(el);
-        if (target && /^https?:/i.test(target.url) && target.url !== location.href) {
-          out.link = target.url;
-          break;
-        }
+        if (target && /^https?:/i.test(target.url) && target.url !== location.href && !links.includes(target.url)) links.push(target.url);
+      }
+      if (links.length) {
+        out.link = links[0];
+        out.links = links.slice(0, 8);
       }
       return out;
     });
     const filled = rows.filter((r) => r.cells.some(Boolean));
     return { rows: filled, signature: filled.slice(0, 3).map((r) => r.cells.join('|')).join('\n') };
+  }
+
+  // How many rows the page says the list has ("Showing 87 rows", "1 - 50 of
+  // 312 items", "Search Result (87)"), or null.
+  function announcedTotal() {
+    const texts = findEverywhere(document, '[class*="pager" i], [class*="paging" i], [class*="result" i], [class*="count" i], [class*="total" i], label, span').filter((el) => isVisible(el) && el.childElementCount <= 2).map((el) => clean(el.innerText || el.textContent)).filter((t) => t && t.length < 80);
+    for (const t of texts) {
+      const m = t.match(/\bof\s+([\d,]+)\s*(items|rows|records|results|entries)?\b/i) || t.match(/^showing\s+([\d,]+)\s+(rows|items|records|results)/i) || t.match(/(?:results?|records?|found|total)\s*[:(]\s*([\d,]+)\s*\)?$/i);
+      if (m) return Number(m[1].replace(/,/g, ''));
+    }
+    return null;
   }
 
   // A grid that is there but holds nothing: its column headers, when the
@@ -1222,8 +1248,13 @@
   async function readTableScrolled(spec, { maxSteps = 400 } = {}) {
     const first = readTable(spec);
     const rowsSel = spec.row ? `${spec.container} ${spec.row.replace(/^:scope\s*>?\s*/, '')}` : `${spec.container} tr, ${spec.container} [role="row"]`;
-    const scroller = scrollerOf(rowsSel);
-    if (!scroller || scroller.scrollHeight <= scroller.clientHeight + 4) return first;
+    // The box the rows scroll in; else the page itself, when it is taller than its window.
+    let scroller = scrollerOf(rowsSel);
+    if (!scroller || scroller.scrollHeight <= scroller.clientHeight + 4) {
+      const page = document.scrollingElement || document.documentElement;
+      scroller = page && page.scrollHeight > page.clientHeight + 4 ? page : null;
+    }
+    if (!scroller) return first;
     const seen = new Map();
     const take = (read) => {
       let fresh = 0;
@@ -1267,7 +1298,7 @@
     scroller.scrollTop = top;
     scroller.dispatchEvent(new Event('scroll'));
     const rows = [...seen.values()];
-    return { rows, signature: first.signature, scrolled: true };
+    return { rows, signature: first.signature, scrolled: true, expected: announcedTotal() };
   }
 
   // The pager's "next" control when there is one and it is enabled. near: the
@@ -1438,6 +1469,14 @@
   function storeDropdowns() {
     const found = [];
     const sel = '[aria-haspopup], [role="combobox"], [role="listbox"], [role="button"], button, [class*="dropdown" i], [class*="select" i], [class*="combo" i], [class*="picker" i], [class*="switcher" i]';
+    // What an element and the boxes around it are called: ids, classes, names, test ids.
+    const identOf = (el, up = 0) => {
+      let out = '';
+      for (let node = el, i = 0; node && node !== document.body && i <= up; node = parentOf(node), i++) {
+        out += ` ${typeof node.className === 'string' ? node.className : ''} ${node.id || ''} ${node.getAttribute?.('name') || ''} ${node.getAttribute?.('data-testid') || ''}`;
+      }
+      return out;
+    };
     for (const el of findEverywhere(document, sel)) {
       if (!isVisible(el) || el.matches(NAV_ITEM) || el.matches('input, textarea')) continue;
       if (deepClosest(el, NAV_AREA) || deepClosest(el, 'table, [role="grid"], [role="row"]') || inEditor(el)) continue;
@@ -1446,7 +1485,7 @@
       const text = clean(el.innerText || el.textContent || '');
       const label = `${text} ${el.getAttribute('aria-label') || ''} ${el.getAttribute('title') || ''}`;
       if (!text || text.length > 80 || NOT_A_STORE.test(label)) continue;
-      const ident = `${typeof el.className === 'string' ? el.className : ''} ${el.id || ''} ${el.getAttribute('name') || ''} ${el.getAttribute('data-testid') || ''}`;
+      const ident = identOf(el);
       const opens =
         el.hasAttribute('aria-haspopup') ||
         ['combobox', 'listbox'].includes(el.getAttribute('role')) ||
@@ -1455,6 +1494,21 @@
       if (!opens) continue;
       const hint = STORE_WORDS.test(ident) || DEALER_NAME.test(text) || DEALER_CODE.test(text);
       found.push({ el, text, hint, area: box.width * box.height });
+    }
+    // A type-ahead: a text input that opens a list of choices (its value is
+    // the choice made: "Inver Grove Hyundai (8497)"). Date inputs are not.
+    for (const el of findEverywhere(document, 'input[type="text"], input:not([type]), input[role="combobox"], input[aria-autocomplete]')) {
+      if (!isVisible(el) || el.disabled || deepClosest(el, NAV_AREA) || deepClosest(el, 'table, [role="grid"], [role="row"]')) continue;
+      const box = el.getBoundingClientRect();
+      if (box.width < 40 || box.top + window.scrollY > 340) continue;
+      const own = identOf(el);
+      const around = identOf(el, 8);
+      if (!/dropdown|typeahead|autocomplete|combo|select/i.test(own) && !el.hasAttribute('aria-autocomplete') && el.getAttribute('role') !== 'combobox') continue;
+      if (/date|calendar|search/i.test(own) || /MM\/DD|search/i.test(el.getAttribute('placeholder') || '')) continue;
+      const text = clean(el.value || '');
+      if (NOT_A_STORE.test(text) || /language/i.test(around)) continue;
+      const hint = STORE_WORDS.test(around) || DEALER_NAME.test(text) || DEALER_CODE.test(text);
+      found.push({ el, text: text || el.getAttribute('placeholder') || '(empty)', hint, area: box.width * box.height });
     }
     // Of nested candidates (a wrapper around the box around the caption) the innermost with the caption.
     const kept = found.filter((c) => !found.some((d) => d !== c && deepContains(c.el, d.el)));
@@ -1495,7 +1549,26 @@
     const el = storeControl(control);
     if (!el) return null;
     markVisible();
+    if (el.matches('input, textarea')) el.focus();
     press(el);
+    return true;
+  }
+  // A type-ahead that showed nothing, or only what matches its current text:
+  // how: 'clear' empties the text (the widget then lists every choice; the
+  // choice already made stays until another is picked), 'arrow' presses the
+  // Down key. The list that appears counts from the last openStoreMenu().
+  function nudgeStoreMenu(control, how) {
+    const el = storeControl(control);
+    if (!el || !el.matches('input, textarea')) return false;
+    el.focus();
+    if (how === 'clear') {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+      if (setter) setter.call(el, '');
+      else el.value = '';
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+    } else {
+      for (const type of ['keydown', 'keyup']) el.dispatchEvent(new KeyboardEvent(type, { key: 'ArrowDown', code: 'ArrowDown', keyCode: 40, which: 40, bubbles: true, composed: true, cancelable: true }));
+    }
     return true;
   }
   // Whether a store's entry is on screen (the menu is open).
@@ -1503,11 +1576,11 @@
   // What the switcher shows now (the store the page is on).
   const storeCaption = (control) => {
     const el = storeControl(control);
-    return el ? clean(el.innerText || el.textContent || '') : null;
+    return el ? clean(el.matches('input, textarea') ? el.value : el.innerText || el.textContent || '') : null;
   };
-  function storeMenuItems() {
+  function storeMenuItems({ keep = false } = {}) {
     const before = shownBefore;
-    shownBefore = null;
+    if (!keep) shownBefore = null;
     if (!before) return [];
     const fresh = allElements().filter((el) => !before.has(el) && isVisible(el));
     const freshSet = new Set(fresh);
@@ -2041,6 +2114,7 @@
     isDataGrid,
     describeStores,
     openStoreMenu,
+    nudgeStoreMenu,
     storeEntryShown,
     storeCaption,
     storeDropdowns,
@@ -2052,6 +2126,7 @@
     describePage,
     inspectPage,
     readTableScrolled,
+    announcedTotal,
     emptyGrid,
     clearField,
   };

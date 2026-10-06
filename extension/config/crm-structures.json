@@ -2076,10 +2076,19 @@
         "tasks",
         "vehicles"
       ],
-      "version": 6,
+      "version": 7,
       "mappedAt": "2026-10-05T14:01:30.509Z",
       "mappedBy": "extension (server)",
       "pageTypes": [
+        {
+          "id": "customer",
+          "role": "record",
+          "entity": "customer",
+          "dataset": "customers",
+          "read": "everything",
+          "urlRegex": "/[Nn]ew[Pp]rospects/OpptyDetails\\.aspx\\?(?:[^#]*&)?lPID=(\\d+)",
+          "note": "A prospect row names its page in the script of its name link: NewWindow(\"../newprospects/OpptyDetails.aspx?lDID=<deal>&lPID=<person>&Loc=…\"). The page is opened by that address in a second work tab (not by clicking, which opens a pop-up window) and read whole: every label and value, every table as a list. Its structure is saved once per run (inspect_record_customer_…json) to write a precise layout from."
+        },
         {
           "id": "prospects_active",
           "role": "screen",
@@ -2112,11 +2121,19 @@
             }
           ],
           "load": [],
+          "alsoLoad": [
+            {
+              "click": {
+                "css": "#slctProspects_holder button[data-testid=\"autocomplete-menu-clear-icon\"]"
+              }
+            }
+          ],
           "table": null,
+          "recordPageType": "customer",
           "validation": {
             "ok": true
           },
-          "note": "Loaded once per run: the dealer drop-down at the top resets to the account default (no data) on every page load, so screens are reached by menu clicks only and every dealer is selected in turn."
+          "note": "Kendo grid #grid in frame NewProspects/Prospects.aspx?Folder=1 (2 Sold, 3 Inactive, 4 Other); 50 rows at a time, the rest by scrolling; a[href=javascript:RefreshGrid()] reloads. Never pressed: Delete, Merge, Add To List, Unwind."
         },
         {
           "id": "prospects_inactive",
@@ -2150,7 +2167,15 @@
             }
           ],
           "load": [],
+          "alsoLoad": [
+            {
+              "click": {
+                "css": "#slctProspects_holder button[data-testid=\"autocomplete-menu-clear-icon\"]"
+              }
+            }
+          ],
           "table": null,
+          "recordPageType": "customer",
           "validation": {
             "ok": true
           }
@@ -2187,7 +2212,15 @@
             }
           ],
           "load": [],
+          "alsoLoad": [
+            {
+              "click": {
+                "css": "#slctProspects_holder button[data-testid=\"autocomplete-menu-clear-icon\"]"
+              }
+            }
+          ],
           "table": null,
+          "recordPageType": "customer",
           "validation": {
             "ok": true
           }
@@ -2224,7 +2257,15 @@
             }
           ],
           "load": [],
+          "alsoLoad": [
+            {
+              "click": {
+                "css": "#slctProspects_holder button[data-testid=\"autocomplete-menu-clear-icon\"]"
+              }
+            }
+          ],
           "table": null,
+          "recordPageType": "customer",
           "validation": {
             "ok": true
           }
@@ -2246,7 +2287,7 @@
             {
               "label": "Inventory",
               "nav": {
-                "css": "h3.Home_LeftNavigation_MainMenu",
+                "css": "span.icon-book.icon-book-black",
                 "kind": "nav",
                 "text": "Inventory"
               }
@@ -2270,11 +2311,15 @@
           "table": null,
           "validation": {
             "ok": true
-          },
-          "note": "Its criteria form is not data; Search loads the matching vehicles for the selected dealer."
+          }
         }
       ],
       "history": [
+        {
+          "version": 7,
+          "mappedAt": "2026-10-06T10:51:06.169Z",
+          "reason": "from an inspection of the real pages: dealer type-ahead #ddlCompany, customer pages OpptyDetails.aspx read whole, Prospects For cleared in a second pass"
+        },
         {
           "version": 6,
           "mappedAt": "2026-10-06T10:06:29.579Z",
@@ -2328,6 +2373,13 @@
         "at": "2026-10-05T14:01:30.509Z",
         "ok": true,
         "reason": "requested from the capture window"
+      },
+      "stores": {
+        "menu": {
+          "control": {
+            "css": "#ddlCompany input[data-testid=\"autocomplete-menu-input-field\"]"
+          }
+        }
       }
     }
   }

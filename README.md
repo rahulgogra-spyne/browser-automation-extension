@@ -87,6 +87,7 @@ Re-running the same day updates existing rows (same `crm_record_id`) instead of 
 `extension/config/crm-structures.json` holds one entry per CRM, matched by host. Each entry lists its page types with a `role`:
 
 - `list`: a page listing records (the row element, each row's link, which record page type the links lead to);
+- `record` with `"read": "everything"`: a record page read with no rules at all: every label and value, every headed table as a list;
 - `record`: one record (the views to open — the page as is, then each tab or collapsed panel — with a rule list per field and per message list; a list whose entries have pages of their own names that page type in `detailPageType`);
 - `message`: an email, call or note on its own page (its fields, `body` included);
 - `screen`: for CRMs that navigate by clicks only: the `path` of clicks that leads to a grid, optional `load` steps to run there, and the grid (`table`; `null` to learn it on screen). Load steps: `{ "click": { "text": "Search" } }`, `{ "fill": { "label": "Last name", "value": "%" } }` (or `"css"` instead of `"label"`; add `"enter": true` to press Enter), `{ "wait": 1500 }`. Example:
@@ -98,7 +99,7 @@ Re-running the same day updates existing rows (same `crm_record_id`) instead of 
     "table": null }
   ```
 
-  Other load steps: `{ "select": { "label": "Days", "value": "All" } }` picks a drop-down option, `{ "clear": { "label": "Prospects For" } }` presses a filter's × (or empties it). A `nav` step needs only `text` (the caption); `css` narrows it when two things share a caption. Column headers become row keys (`Name` → `full_name`, `Cell` → `phone_mobile`, `Stock #` → `stock_number`, anything else slugified).
+  `"alsoLoad"`: load steps for a second reading of the same screen with wider filters; what the first reading gave is kept whatever the second gives. `"recordPageType"`: the page type of the records its rows lead to (the row's link whose address matches it is opened and read for every row). Other load steps: `{ "select": { "label": "Days", "value": "All" } }` picks a drop-down option, `{ "clear": { "label": "Prospects For" } }` presses a filter's × (or empties it). A `nav` step needs only `text` (the caption); `css` narrows it when two things share a caption. Column headers become row keys (`Name` → `full_name`, `Cell` → `phone_mobile`, `Stock #` → `stock_number`, anything else slugified).
 
 Rules are CSS selectors (with ` >>> ` to step into shadow roots and address-less frames), label lookups, and regexes; each field has fallbacks. A record the layout does not fully fit (a tab gone, a required field empty) is still saved with whatever was read and counted under **layout partly fit** in the window.
 
@@ -106,7 +107,15 @@ To add or change a CRM, edit the file and reload the extension (`chrome://extens
 
 ## CDK Unify (`app-unify.app.connectcdk.com`)
 
-The bundled entry matches `app-unify.app.connectcdk.com` and `crm.connectcdk.com`. The capture loads the launcher (`/applications`) once, presses the **CRM** card, finds the dealer drop-down at the top of the CRM and, for every dealer: **Prospects → Active / Inactive / Sold / Other** (grids that scroll instead of paging and draw only the rows in view: scrolled and read step by step) and **Inventory → Vehicle Search** (its criteria form is not data; **Search** is pressed and the results grid learned). The dealer drop-down goes back to the account's default dealer whenever the page is loaded again, which is why nothing is reloaded during a run. The prospect lists are limited by their own filters ("Prospects For": one salesperson; "Days": 7 days): widen them with load steps (`clear`, `select`) once their options are known.
+The bundled entry was written from an inspection of the real pages (`Inspect this tab`). What it knows:
+
+- **Frames.** The launcher (`/applications`) holds the CRM in `iframe.appFrame` (`crm.connectcdk.com/…/elead_track/index.aspx`: sidebar, header); that frame holds the screen in `iframe#Main` (e.g. `NewProspects/Prospects.aspx?Folder=1&Title=Active`; Folder 2 Sold, 3 Inactive, 4 Other).
+- **Dealers.** The switcher is a type-ahead input in the CRM's header, `#ddlCompany input[data-testid="autocomplete-menu-input-field"]` (named in the entry's `stores`). Opened as it is, it lists only what matches its text, so the capture asks for the whole list (Down key, then an empty text) before choosing. A launch through the launcher starts on the account's default dealer, which is why the CRM is loaded once per run and every dealer selected in turn.
+- **Prospect lists.** A Kendo grid `#grid`: 50 rows at a time, the rest as its box is scrolled (the capture scrolls until it has them all and says so when fewer came than "Showing N rows" announces). Two of a row's cells are hidden and are not columns. "Prospects For" limits a list to one salesperson: after reading the list as it opens, the capture presses that field's own clear button and reads it again (`alsoLoad`), keeping both.
+- **Customers.** A row's name link names the customer's page in its script: `NewWindow('../newprospects/OpptyDetails.aspx?lDID=<deal>&lPID=<person>&Loc=…')`. The capture does not click it (that opens a pop-up window): it reads the address and opens the page in a second work tab while that dealer is selected, for every row. The page is read whole (`"read": "everything"` on the `customer` page type): every label with its value becomes a column, every table with column headers a list of entries in the messages file (date, who, kind, the rest as text); the columns the list showed for that row are kept beside them. `lPID` is the row's `crm_record_id`. SSNs, card numbers and passwords are skipped or blanked.
+- **Never pressed:** Delete, Merge, Add To List, Unwind, Reassign, and anything on a customer's page.
+
+The first customer page of each run leaves its structure in `inspect_record_customer_….json` (values masked), from which a precise layout for that page (its tabs, which fields, which history) can be written.
 
 If a screen does not come out right, open it yourself in the CRM with the filters you want and use **Capture this tab**; the log says what was found (`Found N stores…`, `pressed "Search"…`, `learned the grid…`), and the `path` / `load` / `stores` settings of the entry can be tuned from that. **Describe this tab** writes to the log what the extension sees on the open CRM tab — every frame with its grids (columns, row count, first row), the Search button it would press, store switcher candidates, selects and buttons — which is what to send when a screen comes out wrong. A capture also writes that report by itself when a menu step is not found or a screen shows no grid.
 

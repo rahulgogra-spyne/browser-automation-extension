@@ -427,7 +427,17 @@ async function captureItems(run, ctx, items) {
     const recordType = ctx.crm.pageTypes.find((pt) => pt.id === item.recordTypeId);
     const kind = datasetOfPageType(recordType, ctx.crm);
     try {
-      const result = await withBackgroundTab(item.url, (tab) => captureRecord(tab.id, ctx.crm, recordType));
+      const result = await withBackgroundTab(item.url, async (tab) => {
+        const read = await (recordType.read === 'everything' ? scrapeRecord(tab.id, recordType) : captureRecord(tab.id, ctx.crm, recordType));
+        // The first record of a run leaves its structure on disk, for writing or fixing its layout.
+        if (recordType.read === 'everything' && !run.recordInspected) {
+          run.recordInspected = true;
+          await inspectTab({ tabId: tab.id, name: `record_${recordType.id}`, quiet: true }).then((r) => note(`Structure of a ${recordType.entity || 'record'} page saved → ${r.filename}`)).catch(() => {});
+        }
+        return read;
+      });
+      // What the list showed for this record is kept; what its page shows wins.
+      if (result && item.fields) result.fields = { ...item.fields, ...result.fields };
       const verdict = assessExtraction(recordType, result);
       if (!result || !Object.keys(result.fields).length) throw new Error(`nothing read (${describeProblems(verdict) || 'no fields'})`);
       const record = toRecord(result);
@@ -723,25 +733,25 @@ const stamp = () => new Date().toTimeString().slice(0, 8).replace(/:/g, '');
 // targets; what the page shows about a person is masked to its shape), the
 // grid found, and each drop-down at the top with what it lists (opened and
 // closed again, nothing chosen). For describing a CRM that cannot be seen.
-async function inspectTab({ tabId }) {
+async function inspectTab({ tabId, name = '', quiet = false }) {
   const tab = await chrome.tabs.get(tabId).catch(() => null);
   if (!tab || !/^https?:/i.test(tab.url || '')) throw new Error('Open the CRM in a tab first.');
   const settings = await getSettings();
-  await chrome.tabs.update(tabId, { active: true }).catch(() => {});
+  if (!quiet) await chrome.tabs.update(tabId, { active: true }).catch(() => {});
   const tree = (await chrome.webNavigation.getAllFrames({ tabId }).catch(() => [])) ?? [];
   const frames = (await inFrames(tabId, () => window.__crmRuntime?.inspectPage?.() ?? null))
     .filter((f) => f.result && f.result.skeleton.length > 2)
     .map((f) => ({ frameId: f.frameId, parentFrameId: tree.find((t) => t.frameId === f.frameId)?.parentFrameId ?? null, ...f.result }));
   const dropdowns = [];
-  for (const f of (await inFrames(tabId, () => window.__crmRuntime?.storeDropdowns?.() ?? [])).filter((x) => x.result?.length)) {
+  for (const f of quiet ? [] : (await inFrames(tabId, () => window.__crmRuntime?.storeDropdowns?.() ?? [])).filter((x) => x.result?.length)) {
     for (const candidate of f.result) {
       const items = await probeDropdown(tabId, f.frameId, candidate.control);
-      // Dealer names are kept; any other list (people, statuses) is masked to its shape.
-      const like = dealerLike(items);
-      const keep = like >= Math.max(1, Math.ceil(items.length * 0.5));
+      // The application's own lists (dealers, date spans, statuses) are kept; a list of people is masked to its shape.
+      const people = items.filter((i) => /^[A-Z][A-Za-z'’.-]+,\s*[A-Z]/.test(i.raw || i.text)).length >= Math.max(2, items.length * 0.5);
+      const keep = !people;
       dropdowns.push({
         frameId: f.frameId, caption: keep || candidate.hint ? candidate.caption : candidate.caption.replace(/[A-Za-z]/g, 'x').replace(/\d/g, '9'),
-        looksLikeStores: keep, hint: candidate.hint, control: candidate.control, markup: candidate.html,
+        looksLikeStores: dealerLike(items) >= Math.max(1, Math.ceil(items.length * 0.5)), hint: candidate.hint, control: candidate.control, markup: candidate.html,
         entries: items.map((i) => ({ text: keep ? i.raw || i.text : (i.raw || i.text).replace(/[A-Za-z]/g, 'x').replace(/\d/g, '9'), nav: keep ? i.nav : { css: i.nav?.css } })),
       });
     }
@@ -749,8 +759,9 @@ async function inspectTab({ tabId }) {
   const selects = (await inFrames(tabId, () => window.__crmRuntime?.describeStores?.() ?? null)).filter((f) => f.result).map((f) => ({ frameId: f.frameId, ...f.result }));
   const host = new URL(tab.url).host;
   const report = { inspectedAt: new Date().toISOString(), extension: chrome.runtime.getManifest().version, tab: { url: tab.url.replace(/=([^&#]*)/g, '=…'), title: tab.title }, frameTree: tree.map((t) => ({ frameId: t.frameId, parentFrameId: t.parentFrameId, url: t.url.replace(/=([^&#]*)/g, '=…').slice(0, 200) })), storeSelects: selects, dropdowns, frames };
-  const filename = folderFile(settings, `inspect_${host.replace(/[^a-z0-9.-]/gi, '-')}_${localDateKey()}_${stamp()}.json`);
+  const filename = folderFile(settings, `inspect_${name ? `${name}_` : ''}${host.replace(/[^a-z0-9.-]/gi, '-')}_${localDateKey()}_${stamp()}.json`);
   await writeTextFile(filename, JSON.stringify(report, null, 1), 'application/json');
+  if (quiet) return { filename, frames: frames.length, dropdowns: 0 };
   const lines = [
     `${new Date().toLocaleTimeString()}  Inspected ${tab.url.split('?')[0]} → Downloads/${filename}`,
     `            ${frames.length} frame(s): ${frames.map((f) => `${f.path} (${f.skeleton.length} elements${f.grid ? `, grid ${f.grid.rows} rows` : ''})`).join('; ')}`,
@@ -884,7 +895,15 @@ async function probeDropdown(tabId, frameId, control) {
   const inFrame = inFrameOf(tabId, frameId);
   if (!(await inFrame((c) => window.__crmRuntime?.openStoreMenu?.(c) ?? null, [control]))) return [];
   await settleQuick(tabId);
-  const items = (await inFrame(() => window.__crmRuntime?.storeMenuItems?.() ?? [])) ?? [];
+  let items = (await inFrame(() => window.__crmRuntime?.storeMenuItems?.({ keep: true }) ?? [])) ?? [];
+  // A type-ahead may show nothing until asked, or only what matches the text in it: the Down key, then an empty text.
+  for (const how of ['arrow', 'clear']) {
+    if (items.length > 1) break;
+    if (!(await inFrame((c, h) => window.__crmRuntime?.nudgeStoreMenu?.(c, h) ?? false, [control, how]))) break;
+    await settleQuick(tabId);
+    const more = (await inFrame(() => window.__crmRuntime?.storeMenuItems?.({ keep: true }) ?? [])) ?? [];
+    if (more.length > items.length) items = more;
+  }
   // Close it: Escape, and when it ignores that, the way it was opened.
   await inFrame(() => window.__crmRuntime?.pressClose?.({ key: 'Escape' }));
   await settleQuick(tabId);
@@ -915,7 +934,12 @@ async function findStores(tabId, ctx, note = () => {}) {
     }
     const control = { text: '', kind: 'nav', ...config.menu.control };
     const items = await probeDropdown(tabId, frameId, control);
-    return items.length ? { spec: { kind: 'menu', control, caption: 'store' }, frameId, entries: only(items.map((i) => ({ text: i.raw || i.text, nav: i.nav }))) } : null;
+    if (!items.length) {
+      note(`The store drop-down named in the layout (${control.css}) ${hits.length ? 'listed nothing when opened' : 'is not on screen'}: capturing the store the page is on`);
+      return null;
+    }
+    const current = await inFrameOf(tabId, frameId)((c) => window.__crmRuntime?.storeCaption?.(c) ?? null, [control]);
+    return { spec: { kind: 'menu', control, caption: current || 'store' }, frameId, entries: only(items.map((i) => ({ text: i.raw || i.text, nav: i.nav }))), current };
   }
   // 2. A native <select> of stores.
   const selects = (await inFrames(tabId, () => window.__crmRuntime?.describeStores?.() ?? null)).filter((f) => f.result);
@@ -951,6 +975,11 @@ async function switchStore(tabId, stores, entry) {
     for (let attempt = 0; attempt < 2 && !(await shown()); attempt++) {
       if (!(await inFrame((control) => window.__crmRuntime?.openStoreMenu?.(control) ?? null, [stores.spec.control]))) return null;
       await settleQuick(tabId);
+      for (const how of ['arrow', 'clear']) {
+        if (await shown()) break;
+        if (!(await inFrame((c, h) => window.__crmRuntime?.nudgeStoreMenu?.(c, h) ?? false, [stores.spec.control, how]))) break;
+        await settleQuick(tabId);
+      }
     }
     if (!(await shown())) return null;
   }
@@ -1038,7 +1067,21 @@ async function captureScreens(run, ctx, screens) {
               continue;
             }
             await walkScreen(run, ctx, screen, tab.id, queue, { kind, store });
+            // Once more with wider filters: what the first pass gave is kept whatever this one gives.
+            if (screen.alsoLoad?.length && !cancelRequested) {
+              const undone = await replayLoadSteps(tab.id, screen.alsoLoad);
+              if (undone) note(`"${screen.entity}": could not widen its filters ("${undone}"); kept what the default filters gave`);
+              else {
+                note(`"${screen.entity}": again with wider filters`);
+                await walkScreen(run, ctx, screen, tab.id, queue, { kind, store, again: true });
+              }
+            }
             await flushRun(run, ctx);
+            // The records the rows lead to, read now: in another tab, while this store is the one selected.
+            if (queue.length && !cancelRequested) {
+              note(`${queue.length} ${kind} to read from their own pages`);
+              await captureItems(run, ctx, queue.splice(0));
+            }
           }
         };
         const stores = await findStores(tab.id, ctx, note);
@@ -1074,7 +1117,7 @@ async function captureScreens(run, ctx, screens) {
 // Reads a screen's grid in tabId page after page: each row is saved as a
 // record of its kind, or queued (rows that link to a mapped record page),
 // or opened in place / by click when the screen says so.
-async function walkScreen(run, ctx, screen, tabId, queue, { kind = null, store = null, pressFirst = false } = {}) {
+async function walkScreen(run, ctx, screen, tabId, queue, { kind = null, store = null, pressFirst = false, again = false } = {}) {
   const { stats, note, data } = run;
   const recordType = screen.recordPageType ? ctx.crm.pageTypes.find((pt) => pt.id === screen.recordPageType) : null;
   const startUrl = screen.url || ctx.crm.startUrl;
@@ -1091,7 +1134,7 @@ async function walkScreen(run, ctx, screen, tabId, queue, { kind = null, store =
     note(`"${screen.entity}": the grid looks like ${kind} (${(table.headers ?? []).filter(Boolean).slice(0, 8).join(', ')})`);
   }
   const gridId = `${store ?? ''}|${kind}|${table.container}|${(table.headers ?? []).join('|')}|${first.read.signature}`;
-  if (run.grids.has(gridId)) {
+  if (run.grids.has(gridId) && !again) {
     note(`"${screen.entity}": the same grid was already read under another screen; skipped`);
     return;
   }
@@ -1115,23 +1158,27 @@ async function walkScreen(run, ctx, screen, tabId, queue, { kind = null, store =
     const read = await readNow();
     if (!read) break;
     if (read.scrolled && read.rows.length > first.read.rows.length) note(`"${screen.entity}": scrolled the grid to read all ${read.rows.length} rows`);
+    if (read.expected && read.rows.length < read.expected) note(`"${screen.entity}": read ${read.rows.length} rows of the ${read.expected} the page announces (the rest did not load by scrolling)`);
     if (read.signature === lastSignature) break; // "next" changed nothing: the last page
     lastSignature = read.signature;
     stats.pages++;
     let taken = 0;
+    const queuedBefore = queue.length;
     let previous = null; // the fields the panel showed for the row before
     const toOpen = []; // rows whose record page only a click reaches
     for (const [index, row] of read.rows.entries()) {
       if (cancelRequested) break;
       const fields = row.fields ?? {};
       if (!Object.keys(fields).length) continue;
-      const match = recordType && row.link ? matchesType(recordType, row.link) : null;
+      // Of the addresses the row leads to (its name, its task, "reassign"…), the one that is the record's page.
+      const recordLink = recordType ? (row.links ?? [row.link]).find((l) => l && matchesType(recordType, l)) : null;
+      const match = recordLink ? matchesType(recordType, recordLink) : null;
       if (match) {
-        // The row opens a mapped page: that page is captured (it has everything the row shows and more).
-        const id = `${recordType.id}:${match[1] || row.link}`;
+        // The row opens a known page: that page is captured (everything the row shows, and more), with the row's columns.
+        const id = `${store ?? ''}|${recordType.id}:${match[1] || recordLink}`;
         if (run.seen.has(id)) continue;
         run.seen.add(id);
-        queue.push({ url: row.link, title: rowTitle(fields), recordTypeId: recordType.id, recordId: match[1] ?? '', store });
+        queue.push({ url: recordLink, title: rowTitle(fields), recordTypeId: recordType.id, recordId: match[1] ?? '', store, fields: normalizeFields(fields) });
         stats.found++;
         continue;
       }
@@ -1195,7 +1242,8 @@ async function walkScreen(run, ctx, screen, tabId, queue, { kind = null, store =
       }
     }
     if (lost) break;
-    stats.phase = `Reading "${screen.entity}" (${kind}), page ${pageNo + 1}: ${taken} rows`;
+    const queued = queue.length - queuedBefore;
+    stats.phase = `Reading "${screen.entity}" (${kind}), page ${pageNo + 1}: ${read.rows.length} rows${queued ? `, ${queued} new to read from their own pages` : taken ? `, ${taken} saved` : ', none new'}`;
     note(stats.phase);
     await run.publish();
     if (run.pending.length >= 10) await flushRun(run, ctx);
@@ -1256,6 +1304,66 @@ async function captureHere({ tabId, dataset = null }) {
     bulkInProgress = null;
     await endJob();
   }
+}
+
+// A record page read with no layout: every label and its value, every table
+// as a list of entries, from every frame of the tab (pageType.read:
+// "everything"). Labels become column keys (the standard ones where they
+// fit); tables become the record's message/activity lists. Passwords, SSNs
+// and card numbers are skipped or blanked by the page reader.
+const LABEL_KEYS = [
+  [/^(first|first name|given name)$/i, 'first_name'], [/^(last|last name|surname|family name)$/i, 'last_name'], [/^(name|full name|customer|customer name|buyer)$/i, 'full_name'],
+  [/^(e-?mail|e-?mail address|primary e-?mail)$/i, 'email'], [/^(cell|cell phone|mobile|mobile phone|cellular)$/i, 'phone_mobile'], [/^(home|home phone|day phone|evening phone)$/i, 'phone_home'], [/^(work|work phone|business phone|office phone)$/i, 'phone_work'], [/^(phone|phone number|telephone|primary phone)$/i, 'phone'],
+  [/^(address|street|street address|address 1|address line 1)$/i, 'address'], [/^city$/i, 'city'], [/^(state|province|st)$/i, 'state'], [/^(zip|zip code|postal code|postcode)$/i, 'zip'], [/^country$/i, 'country'],
+  [/^(company|company name|business name|employer)$/i, 'company'], [/^(salesperson|sales person|sales rep|sales associate|assigned to|owner)$/i, 'salesperson'],
+  [/^(source|lead source|up source)$/i, 'lead_source'], [/^(status|lead status|stage|sub status)$/i, 'lead_status'],
+  [/^(year|model year)$/i, 'vehicle_year'], [/^make$/i, 'vehicle_make'], [/^model$/i, 'vehicle_model'], [/^vin( #)?$/i, 'vin'], [/^(stock|stock ?#|stock number)$/i, 'stock_number'], [/^(price|sale price|selling price)$/i, 'price'], [/^(mileage|miles|odometer)$/i, 'mileage'],
+];
+const labelKey = (label) => LABEL_KEYS.find(([re]) => re.test(label.trim()))?.[1] ?? slugKey(label);
+// A table's columns as a message: when, who, what kind, and the rest as its text.
+function entryFromRow(row) {
+  const entry = {};
+  const rest = [];
+  for (const [header, value] of Object.entries(row)) {
+    const text = String(value ?? '').trim();
+    if (!text) continue;
+    const h = header.toLowerCase();
+    if (!entry.timestamp && /date|time|when|created|completed|due/.test(h)) entry.timestamp = text;
+    else if (!entry.sender && /\b(user|by|from|employee|salesperson|agent|rep|owner|assigned)\b/.test(h)) entry.sender = text;
+    else if (!entry.subject && /type|subject|activity|action|task|event|description|title/.test(h)) entry.subject = text;
+    else if (!entry.body && /note|comment|message|body|text|detail|result|outcome|remark/.test(h)) entry.body = text;
+    else rest.push(`${header}: ${text}`);
+  }
+  if (rest.length) entry.body = [entry.body, rest.join('; ')].filter(Boolean).join(' — ');
+  return entry;
+}
+async function scrapeRecord(tabId, pageType) {
+  await settleTab(tabId);
+  const frames = (await inFrames(tabId, () => window.__crmRuntime?.scrapePage?.() ?? null)).map((f) => f.result).filter((r) => r && (r.fields.length || r.tables.length));
+  if (!frames.length) return null;
+  const fields = {};
+  const collections = {};
+  for (const frame of frames) {
+    for (const { label, value } of frame.fields) {
+      const base = labelKey(label);
+      if (!base || !String(value).trim()) continue;
+      // The same label twice (two phones called "Phone"): the second gets a number, unless it says the same.
+      let key = base;
+      for (let n = 2; key in fields && fields[key] !== value && n < 12; n++) key = `${base}_${n}`;
+      if (!(key in fields)) fields[key] = String(value).slice(0, 2000);
+    }
+    for (const table of frame.tables) {
+      // No column headers: the page's layout (label | value | label | value), already read as fields.
+      if (!(table.headers ?? []).some((h) => h && !/^column_\d+$/.test(h))) continue;
+      const entries = table.rows.map(entryFromRow).filter((e) => Object.keys(e).length);
+      if (!entries.length) continue;
+      const base = slugKey(table.name || (table.headers ?? []).slice(0, 2).join(' ') || 'list') || 'list';
+      let name = base;
+      for (let n = 2; name in collections && n < 20; n++) name = `${base}_${n}`;
+      collections[name] = entries.slice(0, 500);
+    }
+  }
+  return { fields, collections, views: ['page'], errors: [], notes: [] };
 }
 
 // The saved layout, followed in the page: fields and message lists, plus
