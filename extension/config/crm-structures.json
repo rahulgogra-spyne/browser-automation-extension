@@ -2076,7 +2076,7 @@
         "tasks",
         "vehicles"
       ],
-      "version": 7,
+      "version": 8,
       "mappedAt": "2026-10-05T14:01:30.509Z",
       "mappedBy": "extension (server)",
       "pageTypes": [
@@ -2316,6 +2316,11 @@
       ],
       "history": [
         {
+          "version": 8,
+          "mappedAt": "2026-10-06T11:17:09.165Z",
+          "reason": "the CRM is opened at its own address first (the session and dealer as they are); the launcher starts on the group default (Saxon Auto Group), which holds no prospects"
+        },
+        {
           "version": 7,
           "mappedAt": "2026-10-06T10:51:06.169Z",
           "reason": "from an inspection of the real pages: dealer type-ahead #ddlCompany, customer pages OpptyDetails.aspx read whole, Prospects For cleared in a second pass"
@@ -2380,7 +2385,8 @@
             "css": "#ddlCompany input[data-testid=\"autocomplete-menu-input-field\"]"
           }
         }
-      }
+      },
+      "directUrl": "https://crm.connectcdk.com/evo2/fresh/elead-v45/elead_track/index.aspx"
     }
   }
 }

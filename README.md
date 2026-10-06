@@ -62,6 +62,8 @@ Then every dealer is selected in turn and every screen read for it: `Found 3 sto
 
 **Capture this tab** does not switch: it reads the list for the dealer the tab is on, and files it under that dealer when the tab's switcher shows one.
 
+When a switcher named in the layout lists nothing when opened, the run goes on for the store the page is on and saves `inspect_dropdown_<crm>_….json`: the switcher's markup, what appeared when it was opened, whether the page had the focus, the page's "switch" form and the script that uses it.
+
 To steer it, a CRM entry in the layout can set `"stores"`:
 
 - `false`: never switch;
@@ -110,6 +112,7 @@ To add or change a CRM, edit the file and reload the extension (`chrome://extens
 The bundled entry was written from an inspection of the real pages (`Inspect this tab`). What it knows:
 
 - **Frames.** The launcher (`/applications`) holds the CRM in `iframe.appFrame` (`crm.connectcdk.com/…/elead_track/index.aspx`: sidebar, header); that frame holds the screen in `iframe#Main` (e.g. `NewProspects/Prospects.aspx?Folder=1&Title=Active`; Folder 2 Sold, 3 Inactive, 4 Other).
+- **Where it starts.** At the CRM's own address (`directUrl`: `crm.connectcdk.com/…/elead_track/index.aspx`), which opens with the session as it is: the dealer you last chose stays chosen. The launcher (`startUrl`, `/applications`) starts a new session on the account's default (the group, "Saxon Auto Group", which holds no prospects); it is only the fallback when the CRM's own page does not show the application (not signed in).
 - **Dealers.** The switcher is a type-ahead input in the CRM's header, `#ddlCompany input[data-testid="autocomplete-menu-input-field"]` (named in the entry's `stores`). Opened as it is, it lists only what matches its text, so the capture asks for the whole list (Down key, then an empty text) before choosing. A launch through the launcher starts on the account's default dealer, which is why the CRM is loaded once per run and every dealer selected in turn.
 - **Prospect lists.** A Kendo grid `#grid`: 50 rows at a time, the rest as its box is scrolled (the capture scrolls until it has them all and says so when fewer came than "Showing N rows" announces). Two of a row's cells are hidden and are not columns. "Prospects For" limits a list to one salesperson: after reading the list as it opens, the capture presses that field's own clear button and reads it again (`alsoLoad`), keeping both.
 - **Customers.** A row's name link names the customer's page in its script: `NewWindow('../newprospects/OpptyDetails.aspx?lDID=<deal>&lPID=<person>&Loc=…')`. The capture does not click it (that opens a pop-up window): it reads the address and opens the page in a second work tab while that dealer is selected, for every row. The page is read whole (`"read": "everything"` on the `customer` page type): every label with its value becomes a column, every table with column headers a list of entries in the messages file (date, who, kind, the rest as text); the columns the list showed for that row are kept beside them. `lPID` is the row's `crm_record_id`. SSNs, card numbers and passwords are skipped or blanked.

@@ -745,13 +745,13 @@ async function inspectTab({ tabId, name = '', quiet = false }) {
   const dropdowns = [];
   for (const f of quiet ? [] : (await inFrames(tabId, () => window.__crmRuntime?.storeDropdowns?.() ?? [])).filter((x) => x.result?.length)) {
     for (const candidate of f.result) {
-      const items = await probeDropdown(tabId, f.frameId, candidate.control);
+      const items = await probeDropdown(tabId, f.frameId, candidate.control, { report: candidate.hint ? 'always' : null });
       // The application's own lists (dealers, date spans, statuses) are kept; a list of people is masked to its shape.
       const people = items.filter((i) => /^[A-Z][A-Za-z'’.-]+,\s*[A-Z]/.test(i.raw || i.text)).length >= Math.max(2, items.length * 0.5);
       const keep = !people;
       dropdowns.push({
         frameId: f.frameId, caption: keep || candidate.hint ? candidate.caption : candidate.caption.replace(/[A-Za-z]/g, 'x').replace(/\d/g, '9'),
-        looksLikeStores: dealerLike(items) >= Math.max(1, Math.ceil(items.length * 0.5)), hint: candidate.hint, control: candidate.control, markup: candidate.html,
+        looksLikeStores: dealerLike(items) >= Math.max(1, Math.ceil(items.length * 0.5)), hint: candidate.hint, control: candidate.control, markup: candidate.html, opened: items.report ?? undefined,
         entries: items.map((i) => ({ text: keep ? i.raw || i.text : (i.raw || i.text).replace(/[A-Za-z]/g, 'x').replace(/\d/g, '9'), nav: keep ? i.nav : { css: i.nav?.css } })),
       });
     }
@@ -891,19 +891,28 @@ const inFrameOf = (tabId, frameId) => async (func, args = []) => {
 };
 
 // Opens a drop-down, lists what it offers, closes it again: [{ text, raw, nav }].
-async function probeDropdown(tabId, frameId, control) {
+// report: 'always', or 'empty' (when nothing was listed), attaches to the
+// result (.report) what the drop-down is and what appeared when it opened.
+async function probeDropdown(tabId, frameId, control, { report = null } = {}) {
   const inFrame = inFrameOf(tabId, frameId);
+  const list = async () => (await inFrame(() => window.__crmRuntime?.storeMenuItems?.({ keep: true }) ?? [])) ?? [];
   if (!(await inFrame((c) => window.__crmRuntime?.openStoreMenu?.(c) ?? null, [control]))) return [];
   await settleQuick(tabId);
-  let items = (await inFrame(() => window.__crmRuntime?.storeMenuItems?.({ keep: true }) ?? [])) ?? [];
+  let items = await list();
   // A type-ahead may show nothing until asked, or only what matches the text in it: the Down key, then an empty text.
   for (const how of ['arrow', 'clear']) {
     if (items.length > 1) break;
     if (!(await inFrame((c, h) => window.__crmRuntime?.nudgeStoreMenu?.(c, h) ?? false, [control, how]))) break;
     await settleQuick(tabId);
-    const more = (await inFrame(() => window.__crmRuntime?.storeMenuItems?.({ keep: true }) ?? [])) ?? [];
+    const more = await list();
     if (more.length > items.length) items = more;
   }
+  // A list fetched from the server arrives a moment later.
+  for (let i = 0; i < 3 && !items.length; i++) {
+    await new Promise((r) => setTimeout(r, 1000));
+    items = await list();
+  }
+  if (report === 'always' || (report === 'empty' && !items.length)) items.report = await inFrame((c) => window.__crmRuntime?.dropdownReport?.(c) ?? null, [control]);
   // Close it: Escape, and when it ignores that, the way it was opened.
   await inFrame(() => window.__crmRuntime?.pressClose?.({ key: 'Escape' }));
   await settleQuick(tabId);
@@ -933,10 +942,20 @@ async function findStores(tabId, ctx, note = () => {}) {
       return entries.length ? { spec: { kind: 'select', css: config.select.css, caption: 'store' }, frameId, entries: only(entries) } : null;
     }
     const control = { text: '', kind: 'nav', ...config.menu.control };
-    const items = await probeDropdown(tabId, frameId, control);
+    const items = await probeDropdown(tabId, frameId, control, { report: 'empty' });
     if (!items.length) {
-      note(`The store drop-down named in the layout (${control.css}) ${hits.length ? 'listed nothing when opened' : 'is not on screen'}: capturing the store the page is on`);
-      return null;
+      const now = await inFrameOf(tabId, frameId)((c) => window.__crmRuntime?.storeCaption?.(c) ?? null, [control]);
+      note(`The store drop-down named in the layout (${control.css}) ${hits.length ? 'listed nothing when opened' : 'is not on screen'}: capturing the store the page is on${now ? ` (${now})` : ''}`);
+      if (items.report) {
+        try {
+          const file = folderFile(ctx.settings ?? (await getSettings()), `inspect_dropdown_${storeSlug(ctx.crm.name) || 'crm'}_${localDateKey()}_${stamp()}.json`);
+          await writeTextFile(file, JSON.stringify(items.report, null, 1), 'application/json');
+          note(`What that drop-down is, what appeared when it was opened and how the page switches stores → ${file}`);
+        } catch {
+          // the note above stands
+        }
+      }
+      return now ? { none: true, markup: [], current: now } : null;
     }
     const current = await inFrameOf(tabId, frameId)((c) => window.__crmRuntime?.storeCaption?.(c) ?? null, [control]);
     return { spec: { kind: 'menu', control, caption: current || 'store' }, frameId, entries: only(items.map((i) => ({ text: i.raw || i.text, nav: i.nav }))), current };
@@ -1013,8 +1032,13 @@ async function captureScreens(run, ctx, screens) {
   const { stats, note } = run;
   stats.lists += screens.length;
   const byStart = new Map();
+  // crm.directUrl: the application's own page, opened with the session as it is (the
+  // store the user is on). Its launcher (startUrl) may start a session on the account's
+  // default store: it is the fallback when the direct page does not show the application.
+  const fallbackOf = new Map();
   for (const screen of screens) {
-    const startUrl = screen.url || ctx.crm.startUrl;
+    const startUrl = screen.url || ctx.crm.directUrl || ctx.crm.startUrl;
+    if (!screen.url && ctx.crm.directUrl && ctx.crm.startUrl && ctx.crm.startUrl !== startUrl) fallbackOf.set(startUrl, ctx.crm.startUrl);
     byStart.set(startUrl, [...(byStart.get(startUrl) ?? []), screen]);
   }
   for (const [startUrl, group] of byStart) {
@@ -1029,15 +1053,25 @@ async function captureScreens(run, ctx, screens) {
         }
         // Into the application, by the first screen that can be reached.
         let entered = null;
-        for (const screen of group) {
-          note(`Opening the CRM by ${(screen.path ?? []).map((s) => s.label).join(' > ') || 'its address'}`);
-          const stuck = await reachScreen(tab.id, screen, note);
-          if (!stuck) {
-            entered = screen;
-            break;
+        let home = startUrl; // where the application was found: reloaded from there when it loses its way
+        const enter = async (quiet) => {
+          for (const screen of group) {
+            note(`Opening the CRM at ${home.split('?')[0]} by ${(screen.path ?? []).map((s) => s.label).join(' > ') || 'its address'}`);
+            const stuck = await reachScreen(tab.id, screen, note);
+            if (!stuck) return screen;
+            if (quiet) return null;
+            note(`Could not reach "${screen.entity}": "${stuck}" was not found on screen. What the tab shows:`);
+            run.data(await describeTab(tab.id));
           }
-          note(`Could not reach "${screen.entity}": "${stuck}" was not found on screen. What the tab shows:`);
-          run.data(await describeTab(tab.id));
+          return null;
+        };
+        entered = await enter(fallbackOf.has(startUrl));
+        if (!entered && fallbackOf.has(startUrl)) {
+          home = fallbackOf.get(startUrl);
+          note(`The CRM's own page did not show the application (not signed in there, or it only runs inside its launcher): going through the launcher, which may start on the account's default store`);
+          await navigateTab(tab.id, home);
+          await settleTab(tab.id);
+          entered = await enter(false);
         }
         if (!entered) {
           stats.failed++;
@@ -1056,9 +1090,9 @@ async function captureScreens(run, ctx, screens) {
             if (stuck) {
               // The CRM lost its way (a dialog, another page): load it again, the store again, once.
               note(`"${stuck}" was not found on screen: loading the CRM again`);
-              await navigateTab(tab.id, startUrl);
+              await navigateTab(tab.id, home);
               await settleTab(tab.id);
-              stuck = (await reachScreen(tab.id, entered, note)) ?? (entry && !(await switchStore(tab.id, stores, entry)) ? `store ${entry.text}` : null) ?? (await reachScreen(tab.id, screen, note));
+              stuck = (await reachScreen(tab.id, entered, note)) ?? (entry && stores && !(await switchStore(tab.id, stores, entry)) ? `store ${entry.text}` : null) ?? (await reachScreen(tab.id, screen, note));
             }
             if (stuck) {
               stats.failed++;
@@ -1086,7 +1120,8 @@ async function captureScreens(run, ctx, screens) {
         };
         const stores = await findStores(tab.id, ctx, note);
         if (stores?.none) run.data(stores.markup);
-        if (!stores || stores.none) return visit(null, null);
+        // No switching: the screens are read for the store the page is on (named, when the drop-down says which).
+        if (!stores || stores.none) return visit(null, stores?.current && !/^-*$/.test(stores.current) ? { text: stores.current } : null);
         note(`Found ${stores.entries.length} store(s)/dealer(s) in the drop-down "${stores.spec.caption}": ${stores.entries.map((e) => e.text).join(' · ')}. Each is captured to its own files.`);
         for (const entry of stores.entries) {
           if (cancelRequested) break;

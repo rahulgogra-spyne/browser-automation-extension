@@ -15,7 +15,7 @@
 // A selector reaches into a web component's shadow root with " >>> ":
 //   "records-record-layout >>> div.slds-form-element > span"
 (() => {
-  const RUNTIME_VERSION = 15;
+  const RUNTIME_VERSION = 16;
   if (window.__crmRuntime?.version >= RUNTIME_VERSION) return;
 
   const STABLE_ATTRS = ['data-testid', 'data-test', 'data-qa', 'data-field', 'data-key', 'data-name', 'data-label', 'name', 'aria-label'];
@@ -1549,7 +1549,12 @@
     const el = storeControl(control);
     if (!el) return null;
     markVisible();
-    if (el.matches('input, textarea')) el.focus();
+    if (el.matches('input, textarea')) {
+      el.focus();
+      // A page that is not the focused one gets no focus events from focus(): say so ourselves.
+      el.dispatchEvent(new FocusEvent('focus', { bubbles: false, composed: true }));
+      el.dispatchEvent(new FocusEvent('focusin', { bubbles: true, composed: true }));
+    }
     press(el);
     return true;
   }
@@ -1590,7 +1595,26 @@
       if (!el || !freshSet.has(el) || PLACEHOLDER_OPTION.test(c.text) || c.role === 'tab') continue;
       out.push({ text: c.text, raw: clean(el.innerText || el.textContent || c.text), nav: describeNav(c.id) });
     }
-    return out;
+    if (out.length) return out;
+    // Nothing "clickable" appeared: the entries of a list still look alike. Of what
+    // appeared, the biggest run of same-looking siblings that each hold a short text.
+    const groups = new Map();
+    for (const el of fresh) {
+      const text = clean(el.innerText || el.textContent || '');
+      if (!text || text.length > 80 || el.childElementCount > 4 || el.matches('input, select, textarea, script, style')) continue;
+      const parent = parentOf(el);
+      if (!parent) continue;
+      const key = `${el.tagName}|${typeof el.className === 'string' ? el.className : ''}`;
+      if (!groups.has(parent)) groups.set(parent, new Map());
+      const byKind = groups.get(parent);
+      byKind.set(key, [...(byKind.get(key) ?? []), el]);
+    }
+    let best = [];
+    for (const byKind of groups.values()) for (const els of byKind.values()) if (els.length > best.length) best = els;
+    return best.filter((el) => !PLACEHOLDER_OPTION.test(clean(el.innerText || el.textContent))).slice(0, 200).map((el) => {
+      const text = clean(el.innerText || el.textContent);
+      return { text: tabCaption(text), raw: text, nav: describeNavEl(el) };
+    });
   }
 
   // Switches to one store: a select's option (by value or text), or a menu entry.
@@ -1756,6 +1780,60 @@
       labels: findEverywhere(document, 'label, dt, th, legend, [class*="label" i], [class*="lbl" i]').filter(isVisible).map((l) => clean(l.innerText || l.textContent).slice(0, 50)).filter((t, i, all) => t && all.indexOf(t) === i).slice(0, 200),
       tabs: findEverywhere(document, '[role="tab"], .k-tabstrip-items li, .nav-tabs li, [class*="tab" i] > a, [class*="tab" i] > li').filter(isVisible).map((t) => clean(t.innerText || t.textContent).slice(0, 40)).filter((t, i, all) => t && all.indexOf(t) === i).slice(0, 60),
       skeleton: lines,
+    };
+  }
+
+  // Everything about a store drop-down that would not list its entries: its
+  // markup, what appeared when it was opened, whether the page has focus, the
+  // page's forms (a "switch" form posts the store chosen) and the script that
+  // mentions the switch. Dealer names are application data and are kept.
+  function fullOutline(el, depth = 0, maxDepth = 7) {
+    const attrs = [...el.attributes].filter((a) => !/^(style|d|viewbox|xmlns)/i.test(a.name)).map((a) => ` ${a.name}="${String(a.value).slice(0, 90)}"`).join('');
+    const own = clean([...el.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent).join(' ')).slice(0, 60);
+    const kids = depth < maxDepth ? [...el.children].slice(0, 12).map((k) => fullOutline(k, depth + 1, maxDepth)).join('') : el.childElementCount ? '…' : '';
+    return `<${el.tagName.toLowerCase()}${attrs}>${own}${kids}</${el.tagName.toLowerCase()}>`;
+  }
+  async function dropdownReport(control) {
+    const el = storeControl(control);
+    const before = shownBefore; // what was showing before the last openStoreMenu()
+    const fresh = before ? allElements().filter((e) => !before.has(e) && isVisible(e)) : [];
+    const freshSet = new Set(fresh);
+    const tops = fresh.filter((e) => !freshSet.has(parentOf(e))).slice(0, 12);
+    let box = el;
+    for (let i = 0; box && i < 9 && !/company|dealer|store|location/i.test(`${box.id} ${typeof box.className === 'string' ? box.className : ''}`); i++) box = parentOf(box);
+    const snippets = [];
+    const WANT = /xSwitch|\.Switch\b|ddlCompany|radialddcompany|SwitchCompany|ChangeCompany|changeCompany|switchCompany|CompanyChange|onCompany/;
+    const grab = (code, from) => {
+      for (const m of code.matchAll(new RegExp(WANT.source, 'g'))) {
+        if (snippets.length >= 14) return;
+        const at = Math.max(0, m.index - 350);
+        const piece = code.slice(at, m.index + 650).replace(/\s+/g, ' ');
+        if (!snippets.some((x) => x.code.includes(piece.slice(300, 420)))) snippets.push({ from, code: piece });
+      }
+    };
+    for (const sc of document.scripts) if (!sc.src && sc.textContent) grab(sc.textContent, 'inline');
+    // The page's own script files (same site): read as the page reads them.
+    for (const sc of [...document.scripts].filter((x) => x.src && new URL(x.src, location.href).origin === location.origin).slice(0, 40)) {
+      if (snippets.length >= 14) break;
+      try {
+        const code = await (await fetch(sc.src, { credentials: 'include' })).text();
+        if (WANT.test(code)) grab(code, sc.src.split('/').pop().split('?')[0]);
+      } catch {
+        // unreadable: skip
+      }
+    }
+    return {
+      found: Boolean(el),
+      value: el ? (el.matches('input, textarea') ? el.value : clean(el.innerText || '')) : null,
+      hasFocus: document.hasFocus(),
+      visibility: document.visibilityState,
+      activeElement: document.activeElement ? `${document.activeElement.tagName.toLowerCase()}#${document.activeElement.id}` : null,
+      control: el ? fullOutline(el, 0, 2) : null,
+      around: box ? fullOutline(box, 0, 9).slice(0, 6000) : null,
+      appeared: tops.map((e) => fullOutline(e, 0, 6).slice(0, 2500)),
+      appearedCount: fresh.length,
+      forms: [...document.forms].map((f) => ({ id: f.id, name: f.getAttribute('name'), action: f.getAttribute('action'), method: f.getAttribute('method'), target: f.getAttribute('target'), fields: [...f.elements].filter((x) => x.name && !/^__/.test(x.name)).slice(0, 12).map((x) => `${x.name}:${x.type}`) })).filter((f) => /switch|company|location/i.test(`${f.id} ${f.name} ${f.fields.join(' ')}`)),
+      scripts: snippets,
     };
   }
 
@@ -2115,6 +2193,7 @@
     describeStores,
     openStoreMenu,
     nudgeStoreMenu,
+    dropdownReport,
     storeEntryShown,
     storeCaption,
     storeDropdowns,
