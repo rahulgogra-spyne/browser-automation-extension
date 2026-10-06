@@ -171,15 +171,12 @@ async function refreshToday() {
   }
 }
 
-// The screen's usable area, so the capture window and the work window can sit side by side.
-const display = () => ({ left: screen.availLeft ?? 0, top: screen.availTop ?? 0, width: screen.availWidth, height: screen.availHeight });
-
 function start(crmId, startUrl = null) {
   const crm = crms.find((c) => c.id === crmId);
   if (!crm) return;
-  if (!confirm(`Capture every record of ${crm.name}? Its pages are loaded in a second window placed beside this one (keep both uncovered: a hidden page is not drawn by the browser) and saved to today's CSV as it goes.`)) return;
+  if (!confirm(`Capture every record of ${crm.name}? Its pages load in a tab next to this one (same tab group), which stays in front while it runs; the toolbar badge counts the records, and this page comes back when it is done. Every store/dealer the CRM offers is captured to its own files.`)) return;
   $('now-note').textContent = '';
-  send({ type: 'captureCrm', crmId, startUrl, display: display() }).catch((error) => ($('now-note').textContent = error.message));
+  send({ type: 'captureCrm', crmId, startUrl }).catch((error) => ($('now-note').textContent = error.message));
 }
 
 $('capture-crm').addEventListener('click', () => start($('crm-select').value));
@@ -196,9 +193,9 @@ $('describe-tab').addEventListener('click', async () => {
 });
 $('here-capture').addEventListener('click', () => {
   if (!activeSite) return;
-  if (!confirm(`Capture the list shown on ${activeSite.host}? It is read page after page in that tab (don't use the tab meanwhile) and saved to today's CSV as it goes.`)) return;
+  if (!confirm(`Capture the list shown on ${activeSite.host}? It is read page after page in that tab, for the dealer/store the tab is on (don't use the tab meanwhile), and saved to today's CSV as it goes.`)) return;
   $('now-note').textContent = '';
-  send({ type: 'captureHere', tabId: activeSite.tabId, dataset: $('here-kind').value || null, display: display() }).catch((error) => ($('now-note').textContent = error.message));
+  send({ type: 'captureHere', tabId: activeSite.tabId, dataset: $('here-kind').value || null }).catch((error) => ($('now-note').textContent = error.message));
 });
 $('cancel').addEventListener('click', () => send({ type: 'cancelCapture' }).catch(() => {}));
 $('clear').addEventListener('click', () => send({ type: 'clearJobs' }).then(tick).catch(() => {}));

@@ -2076,174 +2076,10 @@
         "tasks",
         "vehicles"
       ],
-      "version": 5,
+      "version": 6,
       "mappedAt": "2026-10-05T14:01:30.509Z",
       "mappedBy": "extension (server)",
       "pageTypes": [
-        {
-          "id": "vehicle_search_screen",
-          "role": "screen",
-          "dataset": "vehicles",
-          "entity": "Vehicle Search",
-          "description": "Vehicle Search: the list reached by clicking \"CRM\" > \"Vehicle Search\"",
-          "urlRegex": "(?!)",
-          "path": [
-            {
-              "label": "CRM",
-              "nav": {
-                "css": "div.bPuebU",
-                "kind": "nav",
-                "text": "CRM"
-              }
-            },
-            {
-              "label": "Vehicle Search",
-              "nav": {
-                "css": "a[role=\"menuitem\"].ui-menu-item-wrapper",
-                "kind": "nav",
-                "text": "Vehicle Search"
-              }
-            }
-          ],
-          "frameHost": "crm.connectcdk.com",
-          "table": {
-            "container": "div.inventory-search",
-            "headers": [
-              "Image",
-              "Stock #",
-              "Year",
-              "Make",
-              "Model",
-              "Trim",
-              "N/U/T",
-              "Mileage",
-              "Age",
-              "Ext. Color",
-              "Int. Color",
-              "VIN",
-              "Transmission",
-              "Engine",
-              "WheelBase",
-              "Retail",
-              "Internet",
-              "Status",
-              "Location",
-              "DMS Status"
-            ],
-            "offset": 0,
-            "row": ":scope div:nth-of-type(2) > div:nth-of-type(2) > div > table.noprint > tbody > tr",
-            "columns": [
-              {
-                "index": 1,
-                "key": "stock_number"
-              },
-              {
-                "index": 2,
-                "key": "vehicle_year"
-              },
-              {
-                "index": 3,
-                "key": "vehicle_make"
-              },
-              {
-                "index": 4,
-                "key": "vehicle_model"
-              },
-              {
-                "index": 5,
-                "key": "trim"
-              },
-              {
-                "index": 6,
-                "key": "condition"
-              },
-              {
-                "index": 7,
-                "key": "mileage"
-              },
-              {
-                "index": 8,
-                "key": "age"
-              },
-              {
-                "index": 9,
-                "key": "exterior_color"
-              },
-              {
-                "index": 10,
-                "key": "interior_color"
-              },
-              {
-                "index": 11,
-                "key": "vin"
-              },
-              {
-                "index": 12,
-                "key": "transmission"
-              },
-              {
-                "index": 13,
-                "key": "engine"
-              },
-              {
-                "index": 14,
-                "key": "wheel_base"
-              },
-              {
-                "index": 15,
-                "key": "price"
-              },
-              {
-                "index": 16,
-                "key": "internet_price"
-              },
-              {
-                "index": 17,
-                "key": "status"
-              },
-              {
-                "index": 18,
-                "key": "location"
-              },
-              {
-                "index": 19,
-                "key": "dms_status"
-              }
-            ]
-          },
-          "required": [
-            "stock_number"
-          ],
-          "samples": [],
-          "validation": {
-            "at": "2026-10-05T13:52:52.129Z",
-            "ok": true,
-            "first": {
-              "rows": 6,
-              "columns": [
-                "stock_number",
-                "vehicle_year",
-                "vehicle_make",
-                "vehicle_model",
-                "trim",
-                "condition",
-                "mileage",
-                "age",
-                "exterior_color",
-                "interior_color",
-                "vin",
-                "transmission",
-                "engine",
-                "wheel_base",
-                "price",
-                "internet_price",
-                "status",
-                "location",
-                "dms_status"
-              ]
-            }
-          }
-        },
         {
           "id": "prospects_active",
           "role": "screen",
@@ -2280,7 +2116,7 @@
           "validation": {
             "ok": true
           },
-          "note": "Loads from its filters (no Search button; Refresh reloads). Prospects For (one salesperson) and Days (7 days) limit the list: add load steps to widen them once the grid reads. The grid scrolls (no pager) and is only drawn in a visible window. Its frame: crm.connectcdk.com/evo2/fresh/elead-v45/elead_track/NewProspects/Prospects.aspx?Folder=<1 Active|2 Sold|3 Inactive|4 Other>."
+          "note": "Loaded once per run: the dealer drop-down at the top resets to the account default (no data) on every page load, so screens are reached by menu clicks only and every dealer is selected in turn."
         },
         {
           "id": "prospects_inactive",
@@ -2317,8 +2153,7 @@
           "table": null,
           "validation": {
             "ok": true
-          },
-          "note": "Loads from its filters (no Search button; Refresh reloads). Prospects For (one salesperson) and Days (7 days) limit the list: add load steps to widen them once the grid reads. The grid scrolls (no pager) and is only drawn in a visible window. Its frame: crm.connectcdk.com/evo2/fresh/elead-v45/elead_track/NewProspects/Prospects.aspx?Folder=<1 Active|2 Sold|3 Inactive|4 Other>."
+          }
         },
         {
           "id": "prospects_sold",
@@ -2355,8 +2190,7 @@
           "table": null,
           "validation": {
             "ok": true
-          },
-          "note": "Loads from its filters (no Search button; Refresh reloads). Prospects For (one salesperson) and Days (7 days) limit the list: add load steps to widen them once the grid reads. The grid scrolls (no pager) and is only drawn in a visible window. Its frame: crm.connectcdk.com/evo2/fresh/elead-v45/elead_track/NewProspects/Prospects.aspx?Folder=<1 Active|2 Sold|3 Inactive|4 Other>."
+          }
         },
         {
           "id": "prospects_other",
@@ -2393,11 +2227,59 @@
           "table": null,
           "validation": {
             "ok": true
+          }
+        },
+        {
+          "id": "vehicle_search_screen",
+          "role": "screen",
+          "entity": "Vehicle Search",
+          "dataset": "vehicles",
+          "path": [
+            {
+              "label": "CRM",
+              "nav": {
+                "css": "div.bPuebU",
+                "kind": "nav",
+                "text": "CRM"
+              }
+            },
+            {
+              "label": "Inventory",
+              "nav": {
+                "css": "h3.Home_LeftNavigation_MainMenu",
+                "kind": "nav",
+                "text": "Inventory"
+              }
+            },
+            {
+              "label": "Vehicle Search",
+              "nav": {
+                "css": "a[role=\"menuitem\"].ui-menu-item-wrapper",
+                "kind": "nav",
+                "text": "Vehicle Search"
+              }
+            }
+          ],
+          "load": [
+            {
+              "click": {
+                "text": "Search"
+              }
+            }
+          ],
+          "table": null,
+          "validation": {
+            "ok": true
           },
-          "note": "Loads from its filters (no Search button; Refresh reloads). Prospects For (one salesperson) and Days (7 days) limit the list: add load steps to widen them once the grid reads. The grid scrolls (no pager) and is only drawn in a visible window. Its frame: crm.connectcdk.com/evo2/fresh/elead-v45/elead_track/NewProspects/Prospects.aspx?Folder=<1 Active|2 Sold|3 Inactive|4 Other>."
+          "note": "Its criteria form is not data; Search loads the matching vehicles for the selected dealer."
         }
       ],
       "history": [
+        {
+          "version": 6,
+          "mappedAt": "2026-10-06T10:06:29.579Z",
+          "reason": "one page load per run; dealer drop-down probed and every dealer captured; menu groups by their h3"
+        },
         {
           "version": 5,
           "mappedAt": "2026-10-06T09:25:47.286Z",

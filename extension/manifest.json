@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Spyne CRM Capture",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Capture every record of a mapped CRM into daily CSV files.",
   "minimum_chrome_version": "121",
   "action": {
@@ -29,7 +29,8 @@
     "storage",
     "unlimitedStorage",
     "downloads",
-    "webNavigation"
+    "webNavigation",
+    "tabGroups"
   ],
   "host_permissions": [
     "<all_urls>"

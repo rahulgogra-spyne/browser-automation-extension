@@ -15,7 +15,7 @@
 // A selector reaches into a web component's shadow root with " >>> ":
 //   "records-record-layout >>> div.slds-form-element > span"
 (() => {
-  const RUNTIME_VERSION = 10;
+  const RUNTIME_VERSION = 12;
   if (window.__crmRuntime?.version >= RUNTIME_VERSION) return;
 
   const STABLE_ATTRS = ['data-testid', 'data-test', 'data-qa', 'data-field', 'data-key', 'data-name', 'data-label', 'name', 'aria-label'];
@@ -1103,7 +1103,7 @@
       .slice(0, 60);
     const selects = findEverywhere(document, 'select').filter(isVisible).map((sel) => `${captionOf(sel) || sel.id || 'select'} (${sel.options.length} options: ${[...sel.options].slice(0, 5).map((o) => clean(o.textContent)).join(' | ')}${sel.options.length > 5 ? ' …' : ''})`).slice(0, 20);
     const loader = describeLoader();
-    const stores = [...storeSelects().map((s) => `select "${s.caption}": ${s.options.map((o) => o.text).slice(0, 8).join(' | ')}`), ...storeMenus().map((m) => `menu "${m.caption}" (${m.control.css})`)];
+    const stores = [...storeSelects().map((s) => `select "${s.caption}": ${s.options.map((o) => o.text).slice(0, 8).join(' | ')}`), ...storeDropdowns().map((m) => `drop-down "${m.caption}"${m.hint ? ' (likely)' : ''} ${m.html}`)];
     const headings = findEverywhere(document, 'h1, h2, h3, [role="heading"]').filter(isVisible).map((h) => clean(h.innerText)).filter(Boolean).slice(0, 10);
     // What the page is built from, when no grid was recognised: tables, rows, grid widgets, and the biggest run of look-alike siblings.
     const count = (sel) => findEverywhere(document, sel).length;
@@ -1204,6 +1204,14 @@
     });
     const filled = rows.filter((r) => r.cells.some(Boolean));
     return { rows: filled, signature: filled.slice(0, 3).map((r) => r.cells.join('|')).join('\n') };
+  }
+
+  // A grid that is there but holds nothing: its column headers, when the
+  // frame shows headers, no data row and no spinner. null otherwise.
+  function emptyGrid() {
+    if (busy() || dataRows(document).length) return null;
+    const headers = findEverywhere(document, HEADER_SEL).filter(isVisible).map((h) => clean(h.innerText || h.textContent || '')).filter(Boolean);
+    return headers.length >= 3 && isDataGrid({ headers }) ? headers.slice(0, 12) : null;
   }
 
   // Every row of a grid that scrolls inside its own box, including grids
@@ -1415,25 +1423,57 @@
     return out;
   }
 
-  function storeMenus() {
-    const out = [];
-    const candidates = findEverywhere(document, '[aria-haspopup], [role="combobox"], [role="button"], button, a, [class*="dropdown" i], [class*="switcher" i], [class*="picker" i], [class*="selector" i]').filter((el) => isVisible(el) && !el.closest('table, [role="grid"], [role="row"]') && !inEditor(el));
-    for (const el of candidates) {
-      const text = navText(el);
-      const caption = `${text} ${el.getAttribute('aria-label') || ''} ${el.getAttribute('title') || ''}`;
-      const classy = STORE_WORDS.test(el.className) || STORE_WORDS.test(el.id || '');
-      if (!(STORE_WORDS.test(caption) || (classy && text) || (DEALER_NAME.test(text) && (el.hasAttribute('aria-haspopup') || el.getAttribute('role') === 'combobox' || /caret|chevron|arrow|dropdown/i.test(el.innerHTML))))) continue;
-      if (text.length > 80 || /sign ?out|log ?out|help|support|notification|profile|settings?|search/i.test(caption)) continue;
-      out.push({ kind: 'menu', control: describeNavEl(el), caption: text || caption.trim() });
+  // Navigation is never a store switcher: a menu entry called "Source" or
+  // "Dealership Request" leads to another screen when pressed.
+  const NAV_AREA = '[role="menu"], [role="menubar"], [role="tree"], [role="tablist"], nav, .ui-menu, [class*="sidebar" i], [class*="leftnav" i], [class*="LeftNavigation" i], [class*="breadcrumb" i]';
+  const NAV_ITEM = 'select, option, ul, ol, li, [role="menuitem"], [role="menuitemradio"], [role="treeitem"], [role="tab"], [role="option"], [role="link"]';
+  const NOT_A_STORE = /help|notification|sign ?out|log ?out|profile|setting|search|language|english|espa[nñ]ol|fran[cç]ais|dark mode|actions?\b|print|refresh|merge|add to|release notes|learn more|video|register|submit|export|clear/i;
+  const DEALER_CODE = /\(\s*\d{2,}\s*\)\s*$/; // "Inver Grove Hyundai (8497)"
+
+  // Drop-downs in the top of the page that could switch the dealer / store:
+  // things that open a list (aria-haspopup, a combobox, a "dropdown"/"select"
+  // box with an arrow), outside any navigation and any grid. Which one it is
+  // is settled by opening it and looking at its entries (see the background's
+  // findStores): [{ control, caption, hint }], likeliest first.
+  function storeDropdowns() {
+    const found = [];
+    const sel = '[aria-haspopup], [role="combobox"], [role="listbox"], [role="button"], button, [class*="dropdown" i], [class*="select" i], [class*="combo" i], [class*="picker" i], [class*="switcher" i]';
+    for (const el of findEverywhere(document, sel)) {
+      if (!isVisible(el) || el.matches(NAV_ITEM) || el.matches('input, textarea')) continue;
+      if (deepClosest(el, NAV_AREA) || deepClosest(el, 'table, [role="grid"], [role="row"]') || inEditor(el)) continue;
+      const box = el.getBoundingClientRect();
+      if (box.height > 90 || box.height < 12 || box.width < 40 || box.width > 900 || box.top + window.scrollY > 340) continue;
+      const text = clean(el.innerText || el.textContent || '');
+      const label = `${text} ${el.getAttribute('aria-label') || ''} ${el.getAttribute('title') || ''}`;
+      if (!text || text.length > 80 || NOT_A_STORE.test(label)) continue;
+      const ident = `${typeof el.className === 'string' ? el.className : ''} ${el.id || ''} ${el.getAttribute('name') || ''} ${el.getAttribute('data-testid') || ''}`;
+      const opens =
+        el.hasAttribute('aria-haspopup') ||
+        ['combobox', 'listbox'].includes(el.getAttribute('role')) ||
+        /dropdown|select|combo|picker|switcher/i.test(ident) ||
+        Boolean(el.querySelector('svg, [class*="caret" i], [class*="arrow" i], [class*="chevron" i], [class*="expand" i]'));
+      if (!opens) continue;
+      const hint = STORE_WORDS.test(ident) || DEALER_NAME.test(text) || DEALER_CODE.test(text);
+      found.push({ el, text, hint, area: box.width * box.height });
     }
-    return out;
+    // Of nested candidates (a wrapper around the box around the caption) the innermost with the caption.
+    const kept = found.filter((c) => !found.some((d) => d !== c && deepContains(c.el, d.el)));
+    kept.sort((a, b) => Number(b.hint) - Number(a.hint) || b.area - a.area);
+    return kept.slice(0, 6).map((c) => ({ control: { css: selectorFor(c.el), text: '', kind: 'nav' }, caption: c.text, hint: c.hint, html: outline(c.el) }));
   }
 
-  // The switcher most likely to change the whole account's data: a header
-  // menu or select first, then a filter select beside a search form.
+  // An element's markup without its text, for a diagnostic: tags, roles, ids, classes.
+  function outline(el, depth = 0) {
+    const attrs = ['id', 'class', 'role', 'aria-haspopup', 'aria-expanded', 'aria-label', 'data-testid', 'name', 'type', 'title']
+      .map((a) => (el.getAttribute?.(a) ? ` ${a}="${String(el.getAttribute(a)).slice(0, 60)}"` : ''))
+      .join('');
+    const kids = depth < 3 ? [...el.children].slice(0, 4).map((k) => outline(k, depth + 1)).join('') : el.childElementCount ? '…' : '';
+    return `<${el.tagName.toLowerCase()}${attrs}>${kids}</${el.tagName.toLowerCase()}>`.slice(0, 700);
+  }
+
+  // A native <select> that switches the store (see storeSelects), if any.
   function describeStores() {
     const selects = storeSelects();
-    const menus = storeMenus();
     const headerish = (css) => {
       try {
         return Boolean(findAll(css).find(isVisible)?.closest('header, nav, [role="banner"], [role="navigation"], [class*="header" i], [class*="topbar" i], [class*="navbar" i], [class*="toolbar" i]'));
@@ -1441,7 +1481,7 @@
         return false;
       }
     };
-    return selects.find((s) => !s.inForm && headerish(s.css)) || menus.find((m) => headerish(m.control.css)) || selects.find((s) => !s.inForm) || menus[0] || selects[0] || null;
+    return selects.find((s) => !s.inForm && headerish(s.css)) || selects.find((s) => !s.inForm) || selects[0] || null;
   }
 
   // Opens a menu switcher and lists its entries: [{ text, nav }]. The menu is
@@ -1460,16 +1500,24 @@
   }
   // Whether a store's entry is on screen (the menu is open).
   const storeEntryShown = (entry) => Boolean(entry?.nav && findNav(entry.nav));
+  // What the switcher shows now (the store the page is on).
+  const storeCaption = (control) => {
+    const el = storeControl(control);
+    return el ? clean(el.innerText || el.textContent || '') : null;
+  };
   function storeMenuItems() {
     const before = shownBefore;
     shownBefore = null;
     if (!before) return [];
     const fresh = allElements().filter((el) => !before.has(el) && isVisible(el));
-    const items = clickables({ max: 300 }).filter((c) => {
+    const freshSet = new Set(fresh);
+    const out = [];
+    for (const c of clickables({ max: 300 })) {
       const el = findEverywhere(document, `[data-cn="${c.id}"]`)[0];
-      return el && fresh.includes(el) && !PLACEHOLDER_OPTION.test(c.text) && c.role !== 'tab';
-    });
-    return items.map((c) => ({ text: c.text, nav: describeNav(c.id) }));
+      if (!el || !freshSet.has(el) || PLACEHOLDER_OPTION.test(c.text) || c.role === 'tab') continue;
+      out.push({ text: c.text, raw: clean(el.innerText || el.textContent || c.text), nav: describeNav(c.id) });
+    }
+    return out;
   }
 
   // Switches to one store: a select's option (by value or text), or a menu entry.
@@ -1889,6 +1937,8 @@
     describeStores,
     openStoreMenu,
     storeEntryShown,
+    storeCaption,
+    storeDropdowns,
     storeMenuItems,
     selectStore,
     currentStore,
@@ -1896,6 +1946,7 @@
     describeTables,
     describePage,
     readTableScrolled,
+    emptyGrid,
     clearField,
   };
 })();

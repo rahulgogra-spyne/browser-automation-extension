@@ -137,7 +137,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 });
 
 // The toolbar icon opens the capture window.
-chrome.action.onClicked.addListener(() => ensureConsoleWindow().catch(() => {}));
+chrome.action.onClicked.addListener(() => ensureConsoleWindow({ show: true }).catch(() => {}));
 
 // Row updates and file rewrites run one at a time so two quick saves can't
 // interleave their read-modify-write.
@@ -190,7 +190,15 @@ function startRun({ crmId, name, phase }) {
     for (const line of lines) stats.log.push(`            ${line}`);
     if (stats.log.length > MAX_LOG_LINES) stats.log.splice(0, stats.log.length - MAX_LOG_LINES);
   };
-  return { stats, note, data, seen: new Set(), grids: new Set(), pending: [], publish: () => chrome.storage.session.set({ bulk: stats }) };
+  const publish = async () => {
+    await chrome.storage.session.set({ bulk: stats });
+    // The capture page is behind the work tab during a run: the badge counts the records.
+    if (stats.status === 'running') {
+      await chrome.action.setBadgeBackgroundColor({ color: '#1a7f37' });
+      await chrome.action.setBadgeText({ text: String(stats.captured) });
+    }
+  };
+  return { stats, note, data, seen: new Set(), grids: new Set(), pending: [], publish };
 }
 
 const cut = (value) => {
@@ -247,9 +255,8 @@ async function finishRun(run, ctx, error = null) {
 // with the saved layout and saved to the day's files as it goes. Runs in the
 // background; the capture window follows it through bulkStatus and can
 // cancel it. startUrl: the page the user is on (a list to start from).
-async function captureCrm({ crmId, startUrl = null, display = null }) {
+async function captureCrm({ crmId, startUrl = null }) {
   if (bulkInProgress) throw new Error(`Already capturing ${bulkInProgress}. Wait for it or cancel it.`);
-  if (display) work.screen = display;
   const settings = await getSettings();
   const config = await getCrmConfig();
   const crm = config.crms?.[crmId];
@@ -264,7 +271,7 @@ async function captureCrm({ crmId, startUrl = null, display = null }) {
   if (!lists.length && !screens.length) throw new Error('No list is mapped for this CRM. Open one of its lists (users, contacts, leads…) and capture from there.');
   bulkInProgress = crm.name;
   cancelRequested = false;
-  await ensureConsoleWindow({ arrange: true });
+  await ensureConsoleWindow({ show: false });
   const run = startRun({ crmId, name: crm.name, phase: 'Collecting records…' });
   run.note(`Capturing ${crm.name} with layout v${crm.version}: ${lists.length} list(s), ${screens.length} screen(s)`);
   await run.publish();
@@ -525,7 +532,8 @@ function columnsFromHeaders(headers) {
   const columns = [];
   headers.forEach((header, index) => {
     const caption = String(header ?? '').trim();
-    if (!caption || /^(image|photo|pic|select|actions?|)$/i.test(caption)) return;
+    // Not data: a picture, a row's checkbox ("Select All Press ctrl + space to group"), its buttons.
+    if (!caption || /^(image|photo|pic|select|select all\b.*|actions?|)$/i.test(caption)) return;
     let key = HEADER_KEYS.find(([re]) => re.test(caption))?.[1] ?? slugKey(caption);
     if (!key) return;
     if (used.has(key)) key = `${key}_${index + 1}`;
@@ -649,13 +657,18 @@ async function loadGrid(tabId, ctx, screen, { note, pressFirst = false }) {
     }
     return best;
   };
-  // Data may arrive a while after the screen: look again every second.
+  // A grid with its column headers, no row and no spinner: the list is empty.
+  const emptyNow = async () => (await inFrames(tabId, () => window.__crmRuntime?.emptyGrid?.() ?? null)).map((f) => f.result).find(Boolean) ?? null;
+  // Data may arrive a while after the screen: look again every second; an
+  // empty grid that stays empty for a few seconds settles it sooner.
   const lookFor = async (ms, pressedNow, good = (b) => b && !weak(b.q)) => {
     let found = null;
-    for (const until = Date.now() + ms; ; ) {
+    const started = Date.now();
+    for (const until = started + ms; ; ) {
       const now = await lookNow(pressedNow);
       if (now && (!found || now.q.score >= found.q.score)) found = now;
       if (good(found) || Date.now() >= until || cancelRequested) return found;
+      if (!found && Date.now() - started >= 4000 && (await emptyNow())) return null;
       await new Promise((r) => setTimeout(r, 1000));
     }
   };
@@ -675,7 +688,14 @@ async function loadGrid(tabId, ctx, screen, { note, pressFirst = false }) {
     note(`"${screen.entity}": what reads as a grid is not data (${best.q.rows} rows, ${Math.round(best.q.fill * 100)}% of the columns filled); nothing saved from it`);
     best = null;
   }
-  if (!best) return null;
+  if (!best) {
+    const headers = await emptyNow();
+    if (headers) {
+      note(`"${screen.entity}": the list is empty (a grid with columns ${headers.join(', ')} and no rows)`);
+      return { empty: true };
+    }
+    return null;
+  }
   if (best.fresh) {
     note(`"${screen.entity}": learned the grid on screen: ${best.q.rows} rows, columns ${best.table.columns.map((c) => c.key).join(', ')}`);
     if (ctx.crmId && screen.id && !screen.adHoc) await saveLearnedGrid(ctx.crmId, screen.id, best.table);
@@ -776,84 +796,113 @@ async function openRowPage(tabId, screen, index) {
 // ----------------------------------------- several stores / dealers
 //
 // A CRM account may hold several dealerships / stores / rooftops whose data
-// is separate: a switcher in the header, or a store filter beside the
-// search. On every screen (and on "Capture this tab") the switcher is looked
-// for; when there is one, the screen is read once per store, each store's
-// rows going to their own files. crm.stores in the layout can turn this off
-// (false), name the switcher ({ select: { css } } or { menu: { control } }),
-// or restrict the stores ({ only: ["Store A", "Store B"] }).
+// is separate, switched with a drop-down in the header. A page loaded afresh
+// starts on the account's default one (which may hold nothing at all), so:
+//   - the CRM is loaded ONCE per run, and its screens are reached by menu
+//     clicks only, never by loading the page again;
+//   - the switcher is found by opening the drop-downs at the top of the page
+//     and looking at their entries: the one whose entries read like
+//     dealerships ("Inver Grove Hyundai (8497)") is it. Navigation menus are
+//     never touched;
+//   - every store is selected in turn and every screen read for it, each
+//     store's rows going to their own files.
+// crm.stores in the layout can turn this off (false), name the switcher
+// ({ select: { css } } or { menu: { control: { css } } }), or restrict the
+// stores ({ only: ["Store A", "Store B"] }).
 
 const storeSlug = (name) => String(name ?? '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40);
+const DEALER_CODE = /\(\s*\d{2,}\s*\)\s*$/;
+const DEALER_WORD = /\b(motors?|auto|automotive|autos|cars|toyota|honda|ford|chevrolet|chevy|nissan|hyundai|kia|bmw|mercedes|audi|lexus|subaru|mazda|volkswagen|vw|jeep|dodge|chrysler|ram|gmc|buick|cadillac|volvo|acura|infiniti|genesis|mitsubishi|porsche|tesla|lincoln|cdjr|dealership|dealer|group|store|rooftop|superstore|imports?)\b/i;
+const dealerLike = (items) => items.filter((i) => DEALER_CODE.test(i.raw || i.text) || DEALER_WORD.test(i.raw || i.text)).length;
 
-// The switcher on screen in tabId: { spec, frameId, entries: [{ text, value?, nav? }] } or null.
-async function findStores(tabId, ctx) {
-  const config = ctx.crm.stores;
-  if (config === false) return null;
-  let found = null;
-  if (config?.select || config?.menu) {
-    const spec = config.select ? { kind: 'select', css: config.select.css } : { kind: 'menu', control: config.menu.control };
-    found = { spec, frameId: 0 };
-  } else {
-    const hits = (await inFrames(tabId, () => window.__crmRuntime?.describeStores?.() ?? null)).filter((f) => f.result);
-    const top = hits.find((f) => f.frameId === 0) ?? hits[0];
-    if (!top) return null;
-    found = { spec: top.result, frameId: top.frameId };
-  }
-  const inFrame = async (func, args = []) => {
-    const [r] = await chrome.scripting.executeScript({ target: { tabId, frameIds: [found.frameId] }, func, args }).catch(() => []);
-    return r?.result ?? null;
-  };
-  let entries = [];
-  if (found.spec.kind === 'select') {
-    if (!found.spec.options) {
-      const full = await inFrame((css) => {
-        const sel = document.querySelector(css);
-        return sel ? [...sel.options].map((o) => ({ value: o.value, text: o.textContent.trim() })).filter((o) => o.text) : [];
-      }, [found.spec.css]);
-      entries = full ?? [];
-    } else entries = found.spec.options;
-  } else {
-    if (!(await inFrame((control) => window.__crmRuntime?.openStoreMenu?.(control) ?? null, [found.spec.control]))) return null;
+const inFrameOf = (tabId, frameId) => async (func, args = []) => {
+  const [r] = await chrome.scripting.executeScript({ target: { tabId, frameIds: [frameId] }, func, args }).catch(() => []);
+  return r?.result ?? null;
+};
+
+// Opens a drop-down, lists what it offers, closes it again: [{ text, raw, nav }].
+async function probeDropdown(tabId, frameId, control) {
+  const inFrame = inFrameOf(tabId, frameId);
+  if (!(await inFrame((c) => window.__crmRuntime?.openStoreMenu?.(c) ?? null, [control]))) return [];
+  await settleQuick(tabId);
+  const items = (await inFrame(() => window.__crmRuntime?.storeMenuItems?.() ?? [])) ?? [];
+  // Close it: Escape, and when it ignores that, the way it was opened.
+  await inFrame(() => window.__crmRuntime?.pressClose?.({ key: 'Escape' }));
+  await settleQuick(tabId);
+  if (items[0] && (await inFrame((e) => window.__crmRuntime?.storeEntryShown?.(e) ?? false, [items[0]]))) {
+    await inFrame((c) => window.__crmRuntime?.openStoreMenu?.(c) ?? null, [control]);
     await settleQuick(tabId);
-    entries = (await inFrame(() => window.__crmRuntime?.storeMenuItems?.() ?? [])) ?? [];
-    await inFrame(() => window.__crmRuntime?.pressClose?.({ key: 'Escape' }));
-    await settleQuick(tabId);
-    // A menu that ignores Escape is closed the way it was opened.
-    if (entries[0] && (await inFrame((e) => window.__crmRuntime?.storeEntryShown?.(e) ?? false, [entries[0]]))) {
-      await inFrame((control) => window.__crmRuntime?.openStoreMenu?.(control) ?? null, [found.spec.control]);
-      await settleQuick(tabId);
-    }
   }
-  if (Array.isArray(config?.only)) {
-    const want = new Set(config.only.map((n) => n.toLowerCase()));
-    entries = entries.filter((e) => want.has(e.text.toLowerCase()));
-  }
-  // One entry is no choice; too many is not a store switcher.
-  if (entries.length < 2 || entries.length > 60) return null;
-  return { ...found, entries };
+  return items;
 }
 
-// Switches the tab to one store. Whether the switch was made.
-async function switchStore(tabId, stores, entry) {
-  const inFrame = async (func, args = []) => {
-    const [r] = await chrome.scripting.executeScript({ target: { tabId, frameIds: [stores.frameId] }, func, args }).catch(() => []);
-    return r?.result ?? null;
+// The store switcher on screen in tabId: { spec, frameId, entries: [{ text,
+// value?, nav? }], current } or null. note: the run's log.
+async function findStores(tabId, ctx, note = () => {}) {
+  const config = ctx.crm.stores;
+  if (config === false) return null;
+  const only = (entries) => {
+    if (!Array.isArray(config?.only)) return entries;
+    const want = config.only.map((n) => n.toLowerCase());
+    return entries.filter((e) => want.some((w) => e.text.toLowerCase().includes(w)));
   };
+  // 1. Named in the layout.
+  if (config?.select || config?.menu) {
+    const hits = (await inFrames(tabId, (css) => Boolean(document.querySelector(css)), [config.select?.css ?? config.menu.control.css])).filter((f) => f.result);
+    const frameId = hits[0]?.frameId ?? 0;
+    if (config.select) {
+      const entries = (await inFrameOf(tabId, frameId)((css) => [...(document.querySelector(css)?.options ?? [])].map((o) => ({ value: o.value, text: o.textContent.trim() })).filter((o) => o.text && !/^(-+|select|choose|all|any)$/i.test(o.text)), [config.select.css])) ?? [];
+      return entries.length ? { spec: { kind: 'select', css: config.select.css, caption: 'store' }, frameId, entries: only(entries) } : null;
+    }
+    const control = { text: '', kind: 'nav', ...config.menu.control };
+    const items = await probeDropdown(tabId, frameId, control);
+    return items.length ? { spec: { kind: 'menu', control, caption: 'store' }, frameId, entries: only(items.map((i) => ({ text: i.raw || i.text, nav: i.nav }))) } : null;
+  }
+  // 2. A native <select> of stores.
+  const selects = (await inFrames(tabId, () => window.__crmRuntime?.describeStores?.() ?? null)).filter((f) => f.result);
+  const select = selects.find((f) => f.frameId === 0) ?? selects[0];
+  if (select) return { spec: select.result, frameId: select.frameId, entries: only(select.result.options) };
+  // 3. A drop-down at the top of a frame whose entries read like dealerships.
+  const frames = (await inFrames(tabId, () => window.__crmRuntime?.storeDropdowns?.() ?? [])).filter((f) => f.result?.length);
+  const candidates = frames.flatMap((f) => f.result.map((c) => ({ ...c, frameId: f.frameId }))).sort((a, b) => Number(b.hint) - Number(a.hint)).slice(0, 8);
+  const tried = [];
+  for (const candidate of candidates) {
+    const items = await probeDropdown(tabId, candidate.frameId, candidate.control);
+    const like = dealerLike(items);
+    tried.push(`"${candidate.caption}": ${items.length} entries${items.length ? `, ${like} like dealerships` : ''}`);
+    if (!items.length) continue;
+    if (like >= Math.max(1, Math.ceil(items.length * 0.5)) || (candidate.hint && DEALER_CODE.test(candidate.caption))) {
+      const entries = only(items.map((i) => ({ text: i.raw || i.text, nav: i.nav })));
+      return entries.length ? { spec: { kind: 'menu', control: candidate.control, caption: candidate.caption }, frameId: candidate.frameId, entries, current: candidate.caption } : null;
+    }
+  }
+  if (candidates.length) {
+    note(`No dealer/store switcher recognised among the drop-downs at the top (${tried.join('; ')}). Their markup, to name it in the layout ("stores"):`);
+    return { none: true, markup: candidates.map((c) => `"${c.caption}" in frame ${c.frameId}: ${c.html}`) };
+  }
+  return null;
+}
+
+// Switches the tab to one store and says what the switcher shows afterwards
+// (null when the switch could not be made).
+async function switchStore(tabId, stores, entry) {
+  const inFrame = inFrameOf(tabId, stores.frameId);
   if (stores.spec.kind === 'menu') {
     const shown = () => inFrame((e) => window.__crmRuntime?.storeEntryShown?.(e) ?? false, [entry]);
     for (let attempt = 0; attempt < 2 && !(await shown()); attempt++) {
-      if (!(await inFrame((control) => window.__crmRuntime?.openStoreMenu?.(control) ?? null, [stores.spec.control]))) return false;
+      if (!(await inFrame((control) => window.__crmRuntime?.openStoreMenu?.(control) ?? null, [stores.spec.control]))) return null;
       await settleQuick(tabId);
     }
-    if (!(await shown())) return false;
+    if (!(await shown())) return null;
   }
   const done = await inFrame((spec, e) => window.__crmRuntime?.selectStore?.(spec, e) ?? false, [stores.spec, { ...entry, force: true }]);
-  if (!done) return false;
+  if (!done) return null;
   await followScriptLinks(tabId);
   await new Promise((r) => setTimeout(r, 400));
   if ((await chrome.tabs.get(tabId).catch(() => null))?.status === 'loading') await waitForTabLoad(tabId).catch(() => {});
   await settleTab(tabId);
-  return true;
+  const now = stores.spec.kind === 'menu' ? await inFrame((control) => window.__crmRuntime?.storeCaption?.(control) ?? null, [stores.spec.control]) : await inFrame((spec) => window.__crmRuntime?.currentStore?.(spec) ?? null, [stores.spec]);
+  return now ?? entry.text;
 }
 
 // Reaches a screen in a tab (its path, then its load steps); the caption of
@@ -866,77 +915,98 @@ async function reachScreen(tabId, screen, note) {
   return null;
 }
 
-// Reads a screen for every store the tab offers (or once when it offers
-// none): switch, come back to the screen, re-run its search, read.
-async function walkScreenPerStore(run, ctx, screen, tabId, queue, { kind }) {
-  const { note } = run;
-  const stores = await findStores(tabId, ctx);
-  if (!stores) return walkScreen(run, ctx, screen, tabId, queue, { kind, store: ctx.store ?? null });
-  const names = stores.entries.map((e) => e.text);
-  if (!run.storesNoted) {
-    note(`Found ${names.length} stores/dealers (${stores.spec.kind === 'select' ? `"${stores.spec.caption || 'select'}"` : `menu "${stores.spec.caption}"`}): ${names.join(' · ')}. Each is captured to its own files.`);
-    run.storesNoted = true;
-  }
-  for (const entry of stores.entries) {
-    if (cancelRequested) break;
-    run.stats.phase = `"${screen.entity}": switching to ${entry.text}`;
-    await run.publish();
-    if (!(await switchStore(tabId, stores, entry))) {
-      note(`Could not switch to ${entry.text}; skipped`);
-      continue;
-    }
-    // The app may have gone back to its home: reach the screen again (steps already on screen are skipped).
-    const stuck = await reachScreen(tabId, screen, note);
-    if (stuck) {
-      note(`${entry.text}: could not get back to "${screen.entity}" ("${stuck}" not found); skipped`);
-      continue;
-    }
-    note(`— ${entry.text} —`);
-    await walkScreen(run, ctx, screen, tabId, queue, { kind, store: entry.text, pressFirst: true });
-    await flushRun(run, ctx);
-  }
-}
-
 // Screens of a click-driven CRM (one address for everything): each is the
-// path of clicks that leads to it from the start page, optional load steps
-// (fill a filter, press Search) and the grid found there. Capturing one
-// replays the path in a work tab, loads the grid, reads it, presses "next"
-// and reads again. A screen whose grid is the one an earlier screen already
-// read (the same grid mapped under several menu detours) is skipped.
+// path of clicks that leads to it, optional load steps (fill a filter, press
+// Search) and the grid found there. The CRM is loaded once; then, for every
+// store it offers (or once when it offers none), every screen is reached by
+// its clicks and read: its grid loaded, scrolled or paged to the end. A
+// screen whose grid is the one another screen already gave is skipped.
 async function captureScreens(run, ctx, screens) {
   const { stats, note } = run;
   stats.lists += screens.length;
+  const byStart = new Map();
   for (const screen of screens) {
-    if (cancelRequested) break;
-    const kind = datasetOfPageType(screen, ctx.crm);
     const startUrl = screen.url || ctx.crm.startUrl;
+    byStart.set(startUrl, [...(byStart.get(startUrl) ?? []), screen]);
+  }
+  for (const [startUrl, group] of byStart) {
+    if (cancelRequested) break;
     const queue = [];
-    stats.phase = screen.path?.length ? `Opening "${screen.entity}" (${kind}) by clicking ${screen.path.map((s) => s.label).join(' > ')}` : `Opening "${screen.entity}" (${kind})`;
-    note(stats.phase);
-    await run.publish();
     try {
       await withBackgroundTab(startUrl, async (tab) => {
         const seen = await tabVisibility(tab.id);
         if (seen && seen.state !== 'visible' && !run.hiddenNoted) {
           run.hiddenNoted = true;
-          note(`The work window is not visible to the browser (${seen.state}): keep it uncovered next to this window, or the CRM will not draw its grids`);
+          note(`The work tab is not visible to the browser (${seen.state}): leave it in front while the capture runs, or the CRM may not draw its grids`);
         }
-        const stuck = await reachScreen(tab.id, screen, note);
-        if (stuck) {
-          stats.failed++;
+        // Into the application, by the first screen that can be reached.
+        let entered = null;
+        for (const screen of group) {
+          note(`Opening the CRM by ${(screen.path ?? []).map((s) => s.label).join(' > ') || 'its address'}`);
+          const stuck = await reachScreen(tab.id, screen, note);
+          if (!stuck) {
+            entered = screen;
+            break;
+          }
           note(`Could not reach "${screen.entity}": "${stuck}" was not found on screen. What the tab shows:`);
           run.data(await describeTab(tab.id));
+        }
+        if (!entered) {
+          stats.failed++;
           return;
         }
-        await walkScreenPerStore(run, ctx, screen, tab.id, queue, { kind });
+        // Every screen of the group, for one store (null: the CRM has no store switcher).
+        const visit = async (stores, entry) => {
+          const store = entry?.text ?? ctx.store ?? null;
+          for (const screen of group) {
+            if (cancelRequested) break;
+            const kind = datasetOfPageType(screen, ctx.crm);
+            stats.phase = `${store ? `${store}: ` : ''}opening "${screen.entity}" (${kind})`;
+            note(`${stats.phase} by clicking ${(screen.path ?? []).map((s) => s.label).join(' > ') || '(nothing)'}`);
+            await run.publish();
+            let stuck = await reachScreen(tab.id, screen, note);
+            if (stuck) {
+              // The CRM lost its way (a dialog, another page): load it again, the store again, once.
+              note(`"${stuck}" was not found on screen: loading the CRM again`);
+              await navigateTab(tab.id, startUrl);
+              await settleTab(tab.id);
+              stuck = (await reachScreen(tab.id, entered, note)) ?? (entry && !(await switchStore(tab.id, stores, entry)) ? `store ${entry.text}` : null) ?? (await reachScreen(tab.id, screen, note));
+            }
+            if (stuck) {
+              stats.failed++;
+              note(`Could not reach "${screen.entity}": "${stuck}" was not found on screen. What the tab shows:`);
+              run.data(await describeTab(tab.id));
+              continue;
+            }
+            await walkScreen(run, ctx, screen, tab.id, queue, { kind, store });
+            await flushRun(run, ctx);
+          }
+        };
+        const stores = await findStores(tab.id, ctx, note);
+        if (stores?.none) run.data(stores.markup);
+        if (!stores || stores.none) return visit(null, null);
+        note(`Found ${stores.entries.length} store(s)/dealer(s) in the drop-down "${stores.spec.caption}": ${stores.entries.map((e) => e.text).join(' · ')}. Each is captured to its own files.`);
+        for (const entry of stores.entries) {
+          if (cancelRequested) break;
+          stats.phase = `Switching to ${entry.text}`;
+          await run.publish();
+          const now = await switchStore(tab.id, stores, entry);
+          if (!now) {
+            stats.failed++;
+            note(`Could not switch to ${entry.text}; skipped`);
+            continue;
+          }
+          note(`— ${entry.text} — (the drop-down now shows "${now}")`);
+          await visit(stores, entry);
+        }
       });
     } catch (error) {
       stats.failed++;
-      note(`Failed on "${screen.entity}": ${error.message}`);
+      note(`Failed on ${startUrl}: ${error.message}`);
     }
     await flushRun(run, ctx);
     if (queue.length) {
-      note(`${queue.length} ${kind} to capture from the pages the rows of "${screen.entity}" open`);
+      note(`${queue.length} record(s) to capture from the pages the rows open`);
       await captureItems(run, ctx, queue);
     }
   }
@@ -950,6 +1020,7 @@ async function walkScreen(run, ctx, screen, tabId, queue, { kind = null, store =
   const recordType = screen.recordPageType ? ctx.crm.pageTypes.find((pt) => pt.id === screen.recordPageType) : null;
   const startUrl = screen.url || ctx.crm.startUrl;
   const first = await loadGrid(tabId, ctx, screen, { note, pressFirst });
+  if (first?.empty) return; // said so in the log; nothing to read for this store
   if (!first) {
     note(`"${screen.entity}": no data grid on screen (nothing to read). What the tab shows:`);
     data(await describeTab(tabId));
@@ -1077,9 +1148,8 @@ async function walkScreen(run, ctx, screen, tabId, queue, { kind = null, store =
 // through the menus and pressed Search with the filters they want; the grid
 // on screen is learned (no AI) and read page after page in that very tab.
 // Rows that link into a mapped record page are captured from their pages.
-async function captureHere({ tabId, dataset = null, display = null }) {
+async function captureHere({ tabId, dataset = null }) {
   if (bulkInProgress) throw new Error(`Already capturing ${bulkInProgress}. Wait for it or cancel it.`);
-  if (display) work.screen = display;
   const tab = await chrome.tabs.get(tabId).catch(() => null);
   if (!tab || !/^https?:/i.test(tab.url || '')) throw new Error('Open the CRM list in a tab first.');
   const settings = await getSettings();
@@ -1094,25 +1164,25 @@ async function captureHere({ tabId, dataset = null, display = null }) {
   const screen = { id: `tab:${new URL(tab.url).pathname}`, entity: tab.title || 'this tab', dataset: kind, path: [], url: tab.url, table: null, adHoc: true, recordPageType: recordType?.id };
   bulkInProgress = `${crm.name} (this tab)`;
   cancelRequested = false;
-  await ensureConsoleWindow({ arrange: true });
-  // The tab being read must stay visible: its window goes beside the capture window, its tab in front.
-  const own = await chrome.windows.get(tab.windowId).catch(() => null);
-  if (own && own.id !== work.consoleWindowId) {
-    work.moved = { windowId: own.id, bounds: { state: own.state === 'normal' ? 'normal' : own.state, ...(own.state === 'normal' ? { left: own.left, top: own.top, width: own.width, height: own.height } : {}) } };
-    await chrome.windows.update(own.id, { state: 'normal', ...layout().work }).catch(() => {});
-    await chrome.tabs.update(tab.id, { active: true }).catch(() => {});
-  }
+  await ensureConsoleWindow({ show: false });
+  // The tab being read is the one shown while it is read.
+  await chrome.windows.update(tab.windowId, { focused: true }).catch(() => {});
+  await chrome.tabs.update(tab.id, { active: true }).catch(() => {});
   const run = startRun({ crmId, name: `${crm.name} — the list on the open tab`, phase: 'Reading the grid on the tab…' });
   run.note(`Capturing the list on ${tab.url}`);
   const seen = await tabVisibility(tab.id);
-  if (seen && seen.state !== 'visible') run.note(`The tab is not visible to the browser (${seen.state}): keep its window uncovered, or the CRM will not draw its grid`);
+  if (seen && seen.state !== 'visible') run.note(`The tab is not visible to the browser (${seen.state}): leave it in front while the capture runs, or the CRM may not draw its grid`);
   await run.publish();
   const keepAlive = setInterval(() => chrome.runtime.getPlatformInfo(), 20_000);
   const ctx = { crmId, crm, settings };
   try {
     const queue = [];
     await inject(tab.id, ['content/crm-runtime.js']);
-    await walkScreenPerStore(run, ctx, screen, tab.id, queue, { kind });
+    // The store the tab is on, when its switcher says so (the user chose it: it is not changed here).
+    const shown = (await inFrames(tab.id, () => (window.__crmRuntime?.storeDropdowns?.() ?? []).filter((d) => d.hint).map((d) => d.caption)[0] ?? window.__crmRuntime?.currentStore?.(window.__crmRuntime?.describeStores?.() ?? {}) ?? null)).map((f) => f.result).find(Boolean) ?? null;
+    const store = shown && !/^-+$/.test(shown) ? shown : null;
+    if (store) run.note(`The tab is on ${store}: its rows go to that store's files`);
+    await walkScreen(run, ctx, screen, tab.id, queue, { kind, store });
     await flushRun(run, ctx);
     if (queue.length) {
       run.note(`${queue.length} record(s) to capture from the pages the rows open`);
@@ -1162,62 +1232,72 @@ async function followEntryPages(crm, pageType, result) {
 
 // ---------------------------------------------------- the capture window
 
-// A capture uses two windows side by side: the capture window (the
-// extension's console page: status, progress, log) on the left and a work
-// window on the right in which the CRM pages are loaded one after another.
-// The work pages must be VISIBLE: a tab in the background, or a window
-// covered by another, is not rendered by the browser, and modern grids
-// (which size themselves in rendering callbacks) never draw their rows
-// there. So the work tab is the active tab of its own window, and the two
-// windows are laid out so neither covers the other.
+// A capture lives in ONE tab group ("CRM Capture") in the browser window
+// the user is working in: the capture page (status, progress, log) and,
+// next to it, the work tab in which the CRM pages are loaded one after
+// another. The work tab is the one shown while a capture runs, so the user
+// watches the CRM being read (and the browser draws it: a page that is not
+// shown is not rendered, and some grids then stay empty); the toolbar badge
+// counts the records meanwhile, and the capture page comes back to the
+// front when the run is over.
 const CONSOLE_URL = chrome.runtime.getURL('console/console.html');
-const work = { consoleWindowId: null, windowId: null, tabs: [], screen: null, moved: null }; // tabs: [{ id, busy }]
+const GROUP = { title: 'CRM Capture', color: 'blue' };
+const work = { consoleTabId: null, windowId: null, groupId: null, tabs: [] }; // tabs: [{ id, busy, shown }]
 
-// The screen's usable area, told by the console page (window.screen).
-const layout = () => {
-  const area = work.screen ?? { left: 0, top: 0, width: 1440, height: 900 };
-  const consoleWidth = Math.max(420, Math.min(620, Math.round(area.width * 0.36)));
-  return {
-    console: { left: area.left, top: area.top, width: consoleWidth, height: area.height },
-    work: { left: area.left + consoleWidth, top: area.top, width: Math.max(600, area.width - consoleWidth), height: area.height },
-  };
-};
-
-async function ensureConsoleWindow({ arrange = false } = {}) {
-  // Among the extension's own open pages: a tab's address is not readable
-  // without the "tabs" permission, not even for the extension's own pages.
+// The capture page among the extension's own open pages: a tab's address
+// is not readable without the "tabs" permission, not even for our own pages.
+async function findConsoleTab() {
   const pages = await chrome.runtime.getContexts({ contextTypes: ['TAB'] }).catch(() => []);
-  const existing = pages.find((c) => (c.documentUrl || '').startsWith(CONSOLE_URL) && c.tabId >= 0);
-  if (existing) {
-    work.consoleWindowId = existing.windowId;
-    await chrome.windows.update(existing.windowId, { focused: true, ...(arrange ? { state: 'normal', ...layout().console } : {}) }).catch(() => {});
-    await chrome.tabs.update(existing.tabId, { active: true }).catch(() => {});
-    return existing.windowId;
+  const page = pages.find((c) => (c.documentUrl || '').startsWith(CONSOLE_URL) && c.tabId >= 0);
+  return page ? chrome.tabs.get(page.tabId).catch(() => null) : null;
+}
+
+// Puts tabs in the capture's group (made around the capture page on first use).
+async function addToGroup(tabIds) {
+  try {
+    const alive = work.groupId != null && (await chrome.tabGroups.get(work.groupId).catch(() => null));
+    if (alive) await chrome.tabs.group({ tabIds, groupId: work.groupId });
+    else {
+      work.groupId = await chrome.tabs.group({ tabIds, createProperties: { windowId: work.windowId } });
+      await chrome.tabGroups.update(work.groupId, GROUP);
+    }
+  } catch {
+    // grouping is a nicety (a window that takes no groups): the tabs still sit side by side
   }
-  const win = await chrome.windows.create({ url: CONSOLE_URL, focused: true, ...(arrange ? layout().console : { width: 1400, height: 900 }) }).catch(() => chrome.windows.create({ url: CONSOLE_URL, focused: true }));
-  work.consoleWindowId = win.id;
-  return win.id;
+}
+
+// The capture page: found, or opened beside the tab the user is on.
+// show: bring it to the front. Returns its window.
+async function ensureConsoleWindow({ show = true } = {}) {
+  let tab = await findConsoleTab();
+  if (!tab) {
+    const win = await chrome.windows.getLastFocused({ windowTypes: ['normal'] }).catch(() => null);
+    const [active] = win ? await chrome.tabs.query({ active: true, windowId: win.id }) : [];
+    tab = await chrome.tabs.create({ url: CONSOLE_URL, active: show, ...(win ? { windowId: win.id } : {}), ...(active ? { index: active.index + 1 } : {}) });
+    work.groupId = null;
+  } else if (show) {
+    await chrome.windows.update(tab.windowId, { focused: true }).catch(() => {});
+    await chrome.tabs.update(tab.id, { active: true }).catch(() => {});
+  }
+  work.consoleTabId = tab.id;
+  work.windowId = tab.windowId;
+  const grouped = tab.groupId != null && tab.groupId !== -1 ? await chrome.tabGroups.get(tab.groupId).catch(() => null) : null;
+  if (grouped) work.groupId = grouped.id;
+  else await addToGroup([tab.id]);
+  return tab.windowId;
 }
 
 chrome.tabs.onRemoved.addListener((tabId) => {
   work.tabs = work.tabs.filter((t) => t.id !== tabId);
 });
-chrome.windows.onRemoved.addListener((windowId) => {
-  if (windowId === work.windowId) work.windowId = null;
-});
 
-// A new work tab, visible: the first one opens the work window beside the
-// capture window; a second one (a message page read while its record stays
-// open) is another tab of that window, shown while it is in use.
+// A new work tab: right after the capture page, in its group, shown.
 async function openWorkTab(url) {
-  const alive = work.windowId && (await chrome.windows.get(work.windowId).catch(() => null));
-  if (!alive) {
-    // Bounds off the real screen are refused: then wherever the browser puts it.
-    const win = await chrome.windows.create({ url, focused: false, type: 'normal', ...layout().work }).catch(() => chrome.windows.create({ url, focused: false, type: 'normal' }));
-    work.windowId = win.id;
-    return win.tabs[0];
-  }
-  return chrome.tabs.create({ url, active: true, windowId: work.windowId });
+  const consoleTab = work.consoleTabId != null ? await chrome.tabs.get(work.consoleTabId).catch(() => null) : null;
+  const last = (await Promise.all(work.tabs.map((t) => chrome.tabs.get(t.id).catch(() => null)))).filter(Boolean).sort((a, b) => b.index - a.index)[0] ?? consoleTab;
+  const tab = await chrome.tabs.create({ url, active: true, ...(last ? { windowId: last.windowId, index: last.index + 1 } : {}) });
+  await addToGroup([tab.id]);
+  return tab;
 }
 
 // Loads url in a work tab (reused across calls), waits for it to render, runs
@@ -1253,18 +1333,12 @@ async function withBackgroundTab(url, fn) {
   }
 }
 
-// Closes the work window once a job is over (the capture window stays), and
-// puts back a window that was moved for "Capture this tab".
+// Closes the work tabs once a job is over and shows the capture page again.
 async function endJob() {
   const ids = work.tabs.map((t) => t.id);
   work.tabs = [];
+  if (work.consoleTabId != null) await chrome.tabs.update(work.consoleTabId, { active: true }).catch(() => {});
   await Promise.all(ids.map((id) => chrome.tabs.remove(id).catch(() => {})));
-  work.windowId = null;
-  if (work.moved) {
-    const { windowId, bounds } = work.moved;
-    work.moved = null;
-    await chrome.windows.update(windowId, bounds).catch(() => {});
-  }
 }
 
 // Whether the pages being read are actually drawn by the browser.

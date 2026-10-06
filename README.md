@@ -25,7 +25,7 @@ extension/
 
 1. Sign in to the CRM in Chrome and open it.
 2. Click the extension icon: the **capture window** opens. Its top card names the CRM tab you are on and, when a layout is bundled for it, offers **Capture whole CRM**. You can also pick any bundled CRM from the drop-down.
-3. Press **Capture whole CRM**. The capture window moves to the left of the screen and a **work window** opens to its right, in which the CRM pages load one after another. **Keep both uncovered while it runs**: a browser does not draw a page that is hidden (a background tab, a covered or minimised window), and CRM grids that size themselves while drawing then show no rows. The window shows:
+3. Press **Capture whole CRM**. The CRM's pages load in a **work tab** right next to the capture page, in the same tab group ("CRM Capture") of the window you are in. The work tab stays in front while the run lasts, so you watch the CRM being read; the toolbar badge counts the records, and the capture page comes back to the front when it is done. It shows:
    - progress, time elapsed and the counts (found, captured, saved, messages, failed);
    - **Captured in this run**: one line per record;
    - the **log**, with every field and every message of every record as it was read, e.g.
@@ -53,13 +53,20 @@ Many CRM list screens (CDK Unify's Prospect Search, for one) are empty until a s
 
 ### Several dealerships / stores / accounts in one CRM
 
-A CRM login often covers several dealerships, rooftops or accounts whose data is separate, switched with a drop-down in the header (or a "Dealer"/"Store" filter beside the search). On every screen, and on **Capture this tab**, the extension looks for such a switcher: a `<select>` or menu whose caption says dealer / dealership / store / rooftop / location / branch / account / company…, or whose entries read like dealership names. When it finds one it logs `Found 3 stores/dealers ("Dealership"): Sunrise Toyota · Lakeside Honda · Metro Ford` and reads the screen **once per store**: switch, get back to the screen, run its search again, read every page. Each store's rows go to **their own files** (`leads_customers_sunrise-toyota_<date>.csv`, `leads_messages_sunrise-toyota_<date>.csv`…) and carry the store in a `store` column; duplicates are judged within a store.
+A CRM login often covers several dealerships whose data is separate, switched with a drop-down at the top of the page. Two things make that tricky, and both are handled:
+
+- **A page loaded afresh starts on the account's default dealer**, which may hold nothing. So a click-driven CRM is loaded **once** per run; its screens are then reached by menu clicks only, never by loading the page again, and the dealer chosen stays chosen.
+- **Finding the switcher.** The drop-downs at the top of each frame (things that open a list: `aria-haspopup`, a combobox, a "select"/"dropdown" box with an arrow) are opened one by one and their entries looked at; the one whose entries read like dealerships (`Inver Grove Hyundai (8497)`, a make, "Motors"…) is the switcher. The others are closed again with nothing chosen. Navigation is never touched: menu entries, tabs, sidebars and grids are not candidates. A native `<select>` whose caption says dealer/store/location works too.
+
+Then every dealer is selected in turn and every screen read for it: `Found 3 store(s)/dealer(s) in the drop-down …`, `— Inver Grove Hyundai (8497) — (the drop-down now shows …)`. An empty list is said in one line (`the list is empty (a grid with columns … and no rows)`). Each dealer's rows go to **their own files** (`leads_customers_inver-grove-hyundai-8497_<date>.csv`, `leads_vehicles_…`, `leads_messages_…`) and carry the dealer in a `store` column; duplicates are judged within a dealer.
+
+**Capture this tab** does not switch: it reads the list for the dealer the tab is on, and files it under that dealer when the tab's switcher shows one.
 
 To steer it, a CRM entry in the layout can set `"stores"`:
 
-- `false`: never switch stores;
-- `{ "select": { "css": "#dealerSelect" } }` or `{ "menu": { "control": { "css": "button.store-switcher", "text": "Sunrise Toyota" } } }`: use this switcher;
-- `{ "only": ["Sunrise Toyota", "Metro Ford"] }`: capture these stores only.
+- `false`: never switch;
+- `{ "select": { "css": "#dealerSelect" } }` or `{ "menu": { "control": { "css": "#dealerBtn" } } }`: use this switcher (when none is recognised, the log prints the markup of the drop-downs it tried, which is where to take the selector from);
+- `{ "only": ["Inver Grove Hyundai", "Lakeside Honda"] }`: capture these only.
 
 ## Files
 
@@ -99,7 +106,7 @@ To add or change a CRM, edit the file and reload the extension (`chrome://extens
 
 ## CDK Unify (`app-unify.app.connectcdk.com`)
 
-The bundled entry matches `app-unify.app.connectcdk.com` and `crm.connectcdk.com`. Its screens start from the launcher (`/applications`), press the **CRM** card, then the menu entries: **Vehicle Search** (its search-criteria table is skipped, Search pressed, the inventory grid learned) and **Prospects → Active / Inactive / Sold / Other**. Those prospect lists load from their filters (no Search button; **Refresh** reloads them) and are limited by default to one salesperson ("Prospects For") and the last 7 days ("Days"): the entry's load steps clear "Prospects For"; widen "Days" with a `select` step once its options are known. The grid scrolls instead of paging and renders only the rows in view: it is scrolled and read step by step until every row has been seen. The dealership switcher in the CRM's header drives the per-store capture.
+The bundled entry matches `app-unify.app.connectcdk.com` and `crm.connectcdk.com`. The capture loads the launcher (`/applications`) once, presses the **CRM** card, finds the dealer drop-down at the top of the CRM and, for every dealer: **Prospects → Active / Inactive / Sold / Other** (grids that scroll instead of paging and draw only the rows in view: scrolled and read step by step) and **Inventory → Vehicle Search** (its criteria form is not data; **Search** is pressed and the results grid learned). The dealer drop-down goes back to the account's default dealer whenever the page is loaded again, which is why nothing is reloaded during a run. The prospect lists are limited by their own filters ("Prospects For": one salesperson; "Days": 7 days): widen them with load steps (`clear`, `select`) once their options are known.
 
 If a screen does not come out right, open it yourself in the CRM with the filters you want and use **Capture this tab**; the log says what was found (`Found N stores…`, `pressed "Search"…`, `learned the grid…`), and the `path` / `load` / `stores` settings of the entry can be tuned from that. **Describe this tab** writes to the log what the extension sees on the open CRM tab — every frame with its grids (columns, row count, first row), the Search button it would press, store switcher candidates, selects and buttons — which is what to send when a screen comes out wrong. A capture also writes that report by itself when a menu step is not found or a screen shows no grid.
 
@@ -110,6 +117,6 @@ A grid that reads only a few rows with most columns empty (a search-criteria for
 ## Limits
 
 - Caps per run: 200 pages per list, 5,000 records, 15 message pages per record; the log keeps the last 4,000 lines (the CSV holds everything).
-- Store switching is done on screens (click-driven lists) and on Capture this tab; URL-based lists of a multi-store CRM are read for the store the browser is on.
+- Store switching is done for click-driven CRMs (screens); URL-based lists of a multi-store CRM, and Capture this tab, are read for the store the browser is on.
 - A list that only loads more rows when actually seen on screen, or a virtualised grid that recycles rows, is read as far as it shows.
 - A CRM whose first-run screen (time-zone confirmation, announcements) hides its lists must be past that screen in your browser before capturing.
