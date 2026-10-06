@@ -72,7 +72,8 @@ const handlers = {
   // The CRM page the user is working in (the most recently used web tab),
   // and what the layouts know about it.
   activeSite: async () => {
-    const tabs = (await chrome.tabs.query({})).filter((t) => /^https?:/i.test(t.url || '') && t.url !== CONSOLE_URL);
+    const workTabs = new Set(work.tabs.map((t) => t.id));
+    const tabs = (await chrome.tabs.query({})).filter((t) => /^https?:/i.test(t.url || '') && !workTabs.has(t.id));
     const tab = tabs.sort((a, b) => (b.lastAccessed ?? 0) - (a.lastAccessed ?? 0))[0];
     if (!tab) return { site: null };
     const crm = findCrm(await getCrmConfig(), tab.url);
@@ -246,8 +247,9 @@ async function finishRun(run, ctx, error = null) {
 // with the saved layout and saved to the day's files as it goes. Runs in the
 // background; the capture window follows it through bulkStatus and can
 // cancel it. startUrl: the page the user is on (a list to start from).
-async function captureCrm({ crmId, startUrl = null }) {
+async function captureCrm({ crmId, startUrl = null, display = null }) {
   if (bulkInProgress) throw new Error(`Already capturing ${bulkInProgress}. Wait for it or cancel it.`);
+  if (display) work.screen = display;
   const settings = await getSettings();
   const config = await getCrmConfig();
   const crm = config.crms?.[crmId];
@@ -262,7 +264,7 @@ async function captureCrm({ crmId, startUrl = null }) {
   if (!lists.length && !screens.length) throw new Error('No list is mapped for this CRM. Open one of its lists (users, contacts, leads…) and capture from there.');
   bulkInProgress = crm.name;
   cancelRequested = false;
-  await ensureConsoleWindow();
+  await ensureConsoleWindow({ arrange: true });
   const run = startRun({ crmId, name: crm.name, phase: 'Collecting records…' });
   run.note(`Capturing ${crm.name} with layout v${crm.version}: ${lists.length} list(s), ${screens.length} screen(s)`);
   await run.publish();
@@ -647,16 +649,31 @@ async function loadGrid(tabId, ctx, screen, { note, pressFirst = false }) {
     }
     return best;
   };
+  // Data may arrive a while after the screen: look again every second.
+  const lookFor = async (ms, pressedNow, good = (b) => b && !weak(b.q)) => {
+    let found = null;
+    for (const until = Date.now() + ms; ; ) {
+      const now = await lookNow(pressedNow);
+      if (now && (!found || now.q.score >= found.q.score)) found = now;
+      if (good(found) || Date.now() >= until || cancelRequested) return found;
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+  };
   let pressed = pressFirst ? await press("to load this store's data") : null;
-  let best = await lookNow(pressed);
+  let best = await lookFor(pressed ? 12_000 : 8_000, pressed);
   if (weak(best?.q) && !pressed) {
     if (best) note(`"${screen.entity}": the grid on screen looks unloaded (${best.q.rows} rows, ${Math.round(best.q.fill * 100)}% of the columns filled)`);
     else if (saved.length) note(`"${screen.entity}": the saved grid shows no rows yet`);
     pressed = await press('to load the data');
     if (pressed) {
-      const after = await lookNow(pressed);
+      const after = await lookFor(15_000, pressed);
       if (after && (!best || after.q.score > best.q.score)) best = after;
     } else if (!best) note(`"${screen.entity}": no data grid and no Search button on screen`);
+  }
+  // A short list is fine once it has had time to load; rows with nearly every column empty are not data.
+  if (best && best.q.fill < WEAK_FILL) {
+    note(`"${screen.entity}": what reads as a grid is not data (${best.q.rows} rows, ${Math.round(best.q.fill * 100)}% of the columns filled); nothing saved from it`);
+    best = null;
   }
   if (!best) return null;
   if (best.fresh) {
@@ -672,8 +689,9 @@ async function describeTab(tabId, { full = false } = {}) {
   const frames = (await inFrames(tabId, () => window.__crmRuntime?.describePage?.() ?? null)).filter((f) => f.result).map((f) => ({ frameId: f.frameId, ...f.result }));
   const lines = [];
   for (const f of frames) {
-    if (!full && !f.grids.length && !f.buttons.length) continue;
-    lines.push(`frame ${f.frameId}${f.top ? ' (top)' : ''}: ${f.url} — "${f.title}" ${f.size}${f.headings.length ? ` — headings: ${f.headings.join(' / ')}` : ''}`);
+    if (!full && !f.grids.length && !f.buttons.length && !f.structure) continue;
+    lines.push(`frame ${f.frameId}${f.top ? ' (top)' : ''}: ${f.url} — "${f.title}" ${f.size}, ${f.visibility}${f.headings.length ? ` — headings: ${f.headings.join(' / ')}` : ''}`);
+    if (f.structure) lines.push(`  structure: ${f.structure}`);
     for (const g of f.grids.slice(0, full ? 6 : 3)) lines.push(`  grid${g.calendar ? ' (calendar)' : ''}: ${g.count} rows, columns ${g.headers.filter(Boolean).slice(0, 12).join(' | ')}${g.headers.length > 12 ? ' …' : ''} — first row: ${g.sample.slice(0, 6).join(' | ')} — ${g.container}`);
     if (f.loader) lines.push(`  search button: "${f.loader}"`);
     if (f.stores.length) lines.push(`  store switcher candidates: ${f.stores.join('; ')}`);
@@ -800,6 +818,11 @@ async function findStores(tabId, ctx) {
     entries = (await inFrame(() => window.__crmRuntime?.storeMenuItems?.() ?? [])) ?? [];
     await inFrame(() => window.__crmRuntime?.pressClose?.({ key: 'Escape' }));
     await settleQuick(tabId);
+    // A menu that ignores Escape is closed the way it was opened.
+    if (entries[0] && (await inFrame((e) => window.__crmRuntime?.storeEntryShown?.(e) ?? false, [entries[0]]))) {
+      await inFrame((control) => window.__crmRuntime?.openStoreMenu?.(control) ?? null, [found.spec.control]);
+      await settleQuick(tabId);
+    }
   }
   if (Array.isArray(config?.only)) {
     const want = new Set(config.only.map((n) => n.toLowerCase()));
@@ -817,8 +840,12 @@ async function switchStore(tabId, stores, entry) {
     return r?.result ?? null;
   };
   if (stores.spec.kind === 'menu') {
-    if (!(await inFrame((control) => window.__crmRuntime?.openStoreMenu?.(control) ?? null, [stores.spec.control]))) return false;
-    await settleQuick(tabId);
+    const shown = () => inFrame((e) => window.__crmRuntime?.storeEntryShown?.(e) ?? false, [entry]);
+    for (let attempt = 0; attempt < 2 && !(await shown()); attempt++) {
+      if (!(await inFrame((control) => window.__crmRuntime?.openStoreMenu?.(control) ?? null, [stores.spec.control]))) return false;
+      await settleQuick(tabId);
+    }
+    if (!(await shown())) return false;
   }
   const done = await inFrame((spec, e) => window.__crmRuntime?.selectStore?.(spec, e) ?? false, [stores.spec, { ...entry, force: true }]);
   if (!done) return false;
@@ -889,6 +916,11 @@ async function captureScreens(run, ctx, screens) {
     await run.publish();
     try {
       await withBackgroundTab(startUrl, async (tab) => {
+        const seen = await tabVisibility(tab.id);
+        if (seen && seen.state !== 'visible' && !run.hiddenNoted) {
+          run.hiddenNoted = true;
+          note(`The work window is not visible to the browser (${seen.state}): keep it uncovered next to this window, or the CRM will not draw its grids`);
+        }
         const stuck = await reachScreen(tab.id, screen, note);
         if (stuck) {
           stats.failed++;
@@ -1045,8 +1077,9 @@ async function walkScreen(run, ctx, screen, tabId, queue, { kind = null, store =
 // through the menus and pressed Search with the filters they want; the grid
 // on screen is learned (no AI) and read page after page in that very tab.
 // Rows that link into a mapped record page are captured from their pages.
-async function captureHere({ tabId, dataset = null }) {
+async function captureHere({ tabId, dataset = null, display = null }) {
   if (bulkInProgress) throw new Error(`Already capturing ${bulkInProgress}. Wait for it or cancel it.`);
+  if (display) work.screen = display;
   const tab = await chrome.tabs.get(tabId).catch(() => null);
   if (!tab || !/^https?:/i.test(tab.url || '')) throw new Error('Open the CRM list in a tab first.');
   const settings = await getSettings();
@@ -1061,9 +1094,18 @@ async function captureHere({ tabId, dataset = null }) {
   const screen = { id: `tab:${new URL(tab.url).pathname}`, entity: tab.title || 'this tab', dataset: kind, path: [], url: tab.url, table: null, adHoc: true, recordPageType: recordType?.id };
   bulkInProgress = `${crm.name} (this tab)`;
   cancelRequested = false;
-  await ensureConsoleWindow();
+  await ensureConsoleWindow({ arrange: true });
+  // The tab being read must stay visible: its window goes beside the capture window, its tab in front.
+  const own = await chrome.windows.get(tab.windowId).catch(() => null);
+  if (own && own.id !== work.consoleWindowId) {
+    work.moved = { windowId: own.id, bounds: { state: own.state === 'normal' ? 'normal' : own.state, ...(own.state === 'normal' ? { left: own.left, top: own.top, width: own.width, height: own.height } : {}) } };
+    await chrome.windows.update(own.id, { state: 'normal', ...layout().work }).catch(() => {});
+    await chrome.tabs.update(tab.id, { active: true }).catch(() => {});
+  }
   const run = startRun({ crmId, name: `${crm.name} — the list on the open tab`, phase: 'Reading the grid on the tab…' });
   run.note(`Capturing the list on ${tab.url}`);
+  const seen = await tabVisibility(tab.id);
+  if (seen && seen.state !== 'visible') run.note(`The tab is not visible to the browser (${seen.state}): keep its window uncovered, or the CRM will not draw its grid`);
   await run.publish();
   const keepAlive = setInterval(() => chrome.runtime.getPlatformInfo(), 20_000);
   const ctx = { crmId, crm, settings };
@@ -1120,47 +1162,81 @@ async function followEntryPages(crm, pageType, result) {
 
 // ---------------------------------------------------- the capture window
 
-// A capture runs in its own window: the extension's console page as the
-// first tab (status, progress, log, what was captured) and one or two work
-// tabs beside it in which the CRM pages are loaded one after another. The
-// work tabs are reused for the whole job instead of opened and closed for
-// every record.
+// A capture uses two windows side by side: the capture window (the
+// extension's console page: status, progress, log) on the left and a work
+// window on the right in which the CRM pages are loaded one after another.
+// The work pages must be VISIBLE: a tab in the background, or a window
+// covered by another, is not rendered by the browser, and modern grids
+// (which size themselves in rendering callbacks) never draw their rows
+// there. So the work tab is the active tab of its own window, and the two
+// windows are laid out so neither covers the other.
 const CONSOLE_URL = chrome.runtime.getURL('console/console.html');
-const work = { windowId: null, tabs: [] }; // tabs: [{ id, busy }]
+const work = { consoleWindowId: null, windowId: null, tabs: [], screen: null, moved: null }; // tabs: [{ id, busy }]
 
-async function ensureConsoleWindow() {
-  // By its address among all tabs: a url filter in tabs.query does not match chrome-extension:// pages.
-  const existing = (await chrome.tabs.query({})).find((t) => (t.url || t.pendingUrl || '').startsWith(CONSOLE_URL));
+// The screen's usable area, told by the console page (window.screen).
+const layout = () => {
+  const area = work.screen ?? { left: 0, top: 0, width: 1440, height: 900 };
+  const consoleWidth = Math.max(420, Math.min(620, Math.round(area.width * 0.36)));
+  return {
+    console: { left: area.left, top: area.top, width: consoleWidth, height: area.height },
+    work: { left: area.left + consoleWidth, top: area.top, width: Math.max(600, area.width - consoleWidth), height: area.height },
+  };
+};
+
+async function ensureConsoleWindow({ arrange = false } = {}) {
+  // Among the extension's own open pages: a tab's address is not readable
+  // without the "tabs" permission, not even for the extension's own pages.
+  const pages = await chrome.runtime.getContexts({ contextTypes: ['TAB'] }).catch(() => []);
+  const existing = pages.find((c) => (c.documentUrl || '').startsWith(CONSOLE_URL) && c.tabId >= 0);
   if (existing) {
-    work.windowId = existing.windowId;
-    await chrome.windows.update(existing.windowId, { focused: true }).catch(() => {});
-    await chrome.tabs.update(existing.id, { active: true }).catch(() => {});
+    work.consoleWindowId = existing.windowId;
+    await chrome.windows.update(existing.windowId, { focused: true, ...(arrange ? { state: 'normal', ...layout().console } : {}) }).catch(() => {});
+    await chrome.tabs.update(existing.tabId, { active: true }).catch(() => {});
     return existing.windowId;
   }
-  const win = await chrome.windows.create({ url: CONSOLE_URL, focused: true, width: 1400, height: 900 });
-  work.windowId = win.id;
+  const win = await chrome.windows.create({ url: CONSOLE_URL, focused: true, ...(arrange ? layout().console : { width: 1400, height: 900 }) }).catch(() => chrome.windows.create({ url: CONSOLE_URL, focused: true }));
+  work.consoleWindowId = win.id;
   return win.id;
 }
 
 chrome.tabs.onRemoved.addListener((tabId) => {
   work.tabs = work.tabs.filter((t) => t.id !== tabId);
 });
+chrome.windows.onRemoved.addListener((windowId) => {
+  if (windowId === work.windowId) work.windowId = null;
+});
+
+// A new work tab, visible: the first one opens the work window beside the
+// capture window; a second one (a message page read while its record stays
+// open) is another tab of that window, shown while it is in use.
+async function openWorkTab(url) {
+  const alive = work.windowId && (await chrome.windows.get(work.windowId).catch(() => null));
+  if (!alive) {
+    // Bounds off the real screen are refused: then wherever the browser puts it.
+    const win = await chrome.windows.create({ url, focused: false, type: 'normal', ...layout().work }).catch(() => chrome.windows.create({ url, focused: false, type: 'normal' }));
+    work.windowId = win.id;
+    return win.tabs[0];
+  }
+  return chrome.tabs.create({ url, active: true, windowId: work.windowId });
+}
 
 // Loads url in a work tab (reused across calls), waits for it to render, runs
 // fn(tab) and hands the tab back for the next page.
 async function withBackgroundTab(url, fn) {
   let slot = work.tabs.find((t) => !t.busy);
+  const shownBefore = work.tabs.find((t) => t.shown)?.id ?? null;
   if (!slot) {
-    const windowId = work.windowId && (await chrome.windows.get(work.windowId).catch(() => null)) ? work.windowId : undefined;
-    const tab = await chrome.tabs.create({ url, active: false, ...(windowId ? { windowId } : {}) });
+    const tab = await openWorkTab(url);
     slot = { id: tab.id, busy: true, url };
     work.tabs.push(slot);
     await waitForTabLoad(tab.id);
   } else {
     slot.busy = true;
     slot.url = url;
+    await chrome.tabs.update(slot.id, { active: true }).catch(() => {});
     await navigateTab(slot.id, url);
   }
+  for (const t of work.tabs) t.shown = t === slot;
   try {
     await inject(slot.id, ['content/crm-runtime.js']);
     await chrome.scripting
@@ -1169,14 +1245,32 @@ async function withBackgroundTab(url, fn) {
     return await fn({ id: slot.id });
   } finally {
     slot.busy = false;
+    // Back to the page that was being read (a record whose message page this was).
+    if (shownBefore && shownBefore !== slot.id && work.tabs.some((t) => t.id === shownBefore)) {
+      await chrome.tabs.update(shownBefore, { active: true }).catch(() => {});
+      for (const t of work.tabs) t.shown = t.id === shownBefore;
+    }
   }
 }
 
-// Closes the work tabs once a job is over (the console tab stays).
+// Closes the work window once a job is over (the capture window stays), and
+// puts back a window that was moved for "Capture this tab".
 async function endJob() {
   const ids = work.tabs.map((t) => t.id);
   work.tabs = [];
   await Promise.all(ids.map((id) => chrome.tabs.remove(id).catch(() => {})));
+  work.windowId = null;
+  if (work.moved) {
+    const { windowId, bounds } = work.moved;
+    work.moved = null;
+    await chrome.windows.update(windowId, bounds).catch(() => {});
+  }
+}
+
+// Whether the pages being read are actually drawn by the browser.
+async function tabVisibility(tabId) {
+  const [r] = await chrome.scripting.executeScript({ target: { tabId }, func: () => ({ state: document.visibilityState, size: `${innerWidth}x${innerHeight}` }) }).catch(() => []);
+  return r?.result ?? null;
 }
 
 // Navigates an existing tab and waits for the NEW page: a tab that was

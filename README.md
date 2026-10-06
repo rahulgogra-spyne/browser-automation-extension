@@ -25,7 +25,7 @@ extension/
 
 1. Sign in to the CRM in Chrome and open it.
 2. Click the extension icon: the **capture window** opens. Its top card names the CRM tab you are on and, when a layout is bundled for it, offers **Capture whole CRM**. You can also pick any bundled CRM from the drop-down.
-3. Press **Capture whole CRM**. The CRM pages load one after another in the tab next to the window. The window shows:
+3. Press **Capture whole CRM**. The capture window moves to the left of the screen and a **work window** opens to its right, in which the CRM pages load one after another. **Keep both uncovered while it runs**: a browser does not draw a page that is hidden (a background tab, a covered or minimised window), and CRM grids that size themselves while drawing then show no rows. The window shows:
    - progress, time elapsed and the counts (found, captured, saved, messages, failed);
    - **Captured in this run**: one line per record;
    - the **log**, with every field and every message of every record as it was read, e.g.
@@ -102,6 +102,8 @@ To add or change a CRM, edit the file and reload the extension (`chrome://extens
 The bundled entry matches `app-unify.app.connectcdk.com` and `crm.connectcdk.com`. Its screens start from the launcher (`/applications`), press the **CRM** card, then the menu entries: **Vehicle Search** (its search-criteria table is skipped, Search pressed, the inventory grid learned) and **Prospects → Active / Inactive / Sold / Other**. Those prospect lists load from their filters (no Search button; **Refresh** reloads them) and are limited by default to one salesperson ("Prospects For") and the last 7 days ("Days"): the entry's load steps clear "Prospects For"; widen "Days" with a `select` step once its options are known. The grid scrolls instead of paging and renders only the rows in view: it is scrolled and read step by step until every row has been seen. The dealership switcher in the CRM's header drives the per-store capture.
 
 If a screen does not come out right, open it yourself in the CRM with the filters you want and use **Capture this tab**; the log says what was found (`Found N stores…`, `pressed "Search"…`, `learned the grid…`), and the `path` / `load` / `stores` settings of the entry can be tuned from that. **Describe this tab** writes to the log what the extension sees on the open CRM tab — every frame with its grids (columns, row count, first row), the Search button it would press, store switcher candidates, selects and buttons — which is what to send when a screen comes out wrong. A capture also writes that report by itself when a menu step is not found or a screen shows no grid.
+
+A screen is given time before it is judged: the grid is looked for every second for 8 seconds after the screen is reached, and for 15 seconds after Search/Refresh is pressed (pressing it restarts the CRM's query, so it is not pressed while the first one may still be running). When nothing is found, the log's report says whether the page was visible, whether a spinner was still showing, which column headers exist, and what the page is built from (tables, rows, grid widgets, repeated blocks).
 
 A grid that reads only a few rows with most columns empty (a search-criteria form laid out as a table, or a grid not loaded yet) is treated as not loaded: Search is pressed and the better reading kept. Rows made mostly of input boxes are never taken for data.
 

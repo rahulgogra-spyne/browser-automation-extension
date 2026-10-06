@@ -15,7 +15,7 @@
 // A selector reaches into a web component's shadow root with " >>> ":
 //   "records-record-layout >>> div.slds-form-element > span"
 (() => {
-  const RUNTIME_VERSION = 7;
+  const RUNTIME_VERSION = 10;
   if (window.__crmRuntime?.version >= RUNTIME_VERSION) return;
 
   const STABLE_ATTRS = ['data-testid', 'data-test', 'data-qa', 'data-field', 'data-key', 'data-name', 'data-label', 'name', 'aria-label'];
@@ -573,7 +573,7 @@
     }
   };
 
-  const BUSY = '[aria-busy="true"],[class*="loading" i],[class*="spinner" i],[class*="skeleton" i]';
+  const BUSY = '[aria-busy="true"],[role="progressbar"],[class*="loading" i],[class*="spinner" i],[class*="skeleton" i],[class*="busy-indicator" i]';
   // roots: the shadow roots being watched (watchChanges), so no page-wide search per tick.
   const busy = (roots = []) => [document, ...roots].some((root) => [...root.querySelectorAll(BUSY)].some(isVisible));
 
@@ -719,7 +719,10 @@
         if (size() === before) break;
       }
     }
-    if (scroller) scroller.scrollTop = 0;
+    if (scroller) {
+      scroller.scrollTop = 0;
+      scroller.dispatchEvent(new Event('scroll'));
+    }
     window.scrollTo(0, 0);
     return rounds;
   }
@@ -1102,7 +1105,22 @@
     const loader = describeLoader();
     const stores = [...storeSelects().map((s) => `select "${s.caption}": ${s.options.map((o) => o.text).slice(0, 8).join(' | ')}`), ...storeMenus().map((m) => `menu "${m.caption}" (${m.control.css})`)];
     const headings = findEverywhere(document, 'h1, h2, h3, [role="heading"]').filter(isVisible).map((h) => clean(h.innerText)).filter(Boolean).slice(0, 10);
-    return { url: location.href, title: document.title, top: window === window.top, size: `${innerWidth}x${innerHeight}`, headings, grids: describeTables(), buttons, selects, loader: loader?.text ?? null, stores, text: pageText().slice(0, 400) };
+    // What the page is built from, when no grid was recognised: tables, rows, grid widgets, and the biggest run of look-alike siblings.
+    const count = (sel) => findEverywhere(document, sel).length;
+    const classOf = (el) => (typeof el.className === 'string' && el.className.trim() ? `.${el.className.trim().split(/\s+/).slice(0, 2).join('.')}` : '');
+    let repeated = null;
+    for (const el of allElements()) {
+      if (el.childElementCount < 5 || !isVisible(el)) continue;
+      const kids = [...el.children];
+      const sig = (k) => `${k.tagName}${classOf(k)}`;
+      const same = kids.filter((k) => sig(k) === sig(kids[Math.floor(kids.length / 2)]) && k.childElementCount >= 2);
+      if (same.length >= 5 && (!repeated || same.length * same[0].childElementCount > repeated.score)) repeated = { score: same.length * same[0].childElementCount, text: `${same.length} × ${sig(same[0]).toLowerCase()} (each ${same[0].childElementCount} children: ${[...same[0].children].slice(0, 6).map((c) => c.tagName.toLowerCase() + classOf(c)).join(', ')}) inside ${el.tagName.toLowerCase()}${classOf(el)}${el.getAttribute('role') ? `[role=${el.getAttribute('role')}]` : ''}` };
+    }
+    const widgets = ['.k-grid', '.ag-root', '.MuiDataGrid-root', '[role="grid"]', '[role="table"]', '[role="treegrid"]', '.dataTables_wrapper', '.rt-table', '.slick-viewport', '.tabulator'].filter((sel) => count(sel)).map((sel) => `${sel}×${count(sel)}`);
+    const columnHeaders = findEverywhere(document, HEADER_SEL).filter(isVisible).map((h) => clean(h.innerText || h.textContent || h.getAttribute('aria-label') || '')).filter(Boolean).slice(0, 14);
+    const busyNow = busy();
+    const structure = `${busyNow ? 'STILL LOADING (a spinner is showing) — ' : ''}${columnHeaders.length ? `column headers: ${columnHeaders.join(' | ')} — ` : ''}table×${count('table')} tr×${count('tr')} td×${count('td')} th×${count('th')} [role=row]×${count('[role="row"]')} [role=gridcell]×${count('[role="gridcell"]')} iframe×${count('iframe')}${widgets.length ? ` widgets: ${widgets.join(' ')}` : ''}${repeated ? ` — repeated: ${repeated.text}` : ''}`;
+    return { url: location.href, title: document.title, top: window === window.top, size: `${innerWidth}x${innerHeight}`, visibility: document.visibilityState, structure, headings, grids: describeTables(), buttons, selects, loader: loader?.text ?? null, stores, text: pageText().slice(0, 400) };
   }
 
   function describeGroup(best) {
@@ -1210,8 +1228,13 @@
       }
       return fresh;
     };
-    take(first);
-    const top = scroller.scrollTop;
+    // From the very top: the rows in the DOM may be those of an earlier scroll position.
+    const top = 0;
+    scroller.scrollTop = 0;
+    scroller.dispatchEvent(new Event('scroll'));
+    await sleep(120);
+    await waitQuiet({ quietMs: 300, timeoutMs: 4000, minMs: 0 });
+    take(readTable(spec));
     let idle = 0;
     for (let step = 0; step < maxSteps; step++) {
       const before = scroller.scrollTop;
@@ -1387,14 +1410,14 @@
       const named = STORE_WORDS.test(caption) || STORE_WORDS.test(sel.className);
       const looksLike = options.filter((o) => DEALER_NAME.test(o.textContent)).length >= Math.max(2, options.length * 0.6);
       if (!named && !looksLike) continue;
-      out.push({ kind: 'select', css: selectorFor(sel), caption: caption || 'store', inForm: Boolean(sel.closest('form')), options: options.map((o) => ({ value: o.value, text: clean(o.textContent) })), current: sel.value });
+      out.push({ kind: 'select', css: selectorFor(sel), caption: caption || 'store', inForm: Boolean(sel.closest('form') && sel.closest('form').getElementsByTagName('*').length < 400), options: options.map((o) => ({ value: o.value, text: clean(o.textContent) })), current: sel.value });
     }
     return out;
   }
 
   function storeMenus() {
     const out = [];
-    const candidates = findEverywhere(document, '[aria-haspopup], [role="combobox"], [role="button"], button, a, [class*="dropdown" i], [class*="switcher" i], [class*="picker" i], [class*="selector" i]').filter((el) => isVisible(el) && !el.closest('table, [role="grid"], [role="row"], form') && !inEditor(el));
+    const candidates = findEverywhere(document, '[aria-haspopup], [role="combobox"], [role="button"], button, a, [class*="dropdown" i], [class*="switcher" i], [class*="picker" i], [class*="selector" i]').filter((el) => isVisible(el) && !el.closest('table, [role="grid"], [role="row"]') && !inEditor(el));
     for (const el of candidates) {
       const text = navText(el);
       const caption = `${text} ${el.getAttribute('aria-label') || ''} ${el.getAttribute('title') || ''}`;
@@ -1423,11 +1446,20 @@
 
   // Opens a menu switcher and lists its entries: [{ text, nav }]. The menu is
   // left open; selectStore() presses an entry, or pressClose({key:'Escape'}).
+  // The switcher's control: by selector and caption, else by selector alone
+  // (its caption is the current store, which changes with every switch).
+  function storeControl(control) {
+    return findNav(control) || navPool(control)[control.nth || 0] || null;
+  }
   function openStoreMenu(control) {
+    const el = storeControl(control);
+    if (!el) return null;
     markVisible();
-    if (!pressNav(control, { toggle: true })) return null;
+    press(el);
     return true;
   }
+  // Whether a store's entry is on screen (the menu is open).
+  const storeEntryShown = (entry) => Boolean(entry?.nav && findNav(entry.nav));
   function storeMenuItems() {
     const before = shownBefore;
     shownBefore = null;
@@ -1856,6 +1888,7 @@
     isDataGrid,
     describeStores,
     openStoreMenu,
+    storeEntryShown,
     storeMenuItems,
     selectStore,
     currentStore,

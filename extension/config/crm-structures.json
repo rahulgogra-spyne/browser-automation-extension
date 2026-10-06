@@ -2076,7 +2076,7 @@
         "tasks",
         "vehicles"
       ],
-      "version": 4,
+      "version": 5,
       "mappedAt": "2026-10-05T14:01:30.509Z",
       "mappedBy": "extension (server)",
       "pageTypes": [
@@ -2275,18 +2275,12 @@
               }
             }
           ],
-          "load": [
-            {
-              "clear": {
-                "label": "Prospects For"
-              }
-            }
-          ],
+          "load": [],
           "table": null,
           "validation": {
             "ok": true
           },
-          "note": "Loads from its filters (no Search button; Refresh reloads). Prospects For and Days limit the list: see load steps. The grid scrolls (no pager)."
+          "note": "Loads from its filters (no Search button; Refresh reloads). Prospects For (one salesperson) and Days (7 days) limit the list: add load steps to widen them once the grid reads. The grid scrolls (no pager) and is only drawn in a visible window. Its frame: crm.connectcdk.com/evo2/fresh/elead-v45/elead_track/NewProspects/Prospects.aspx?Folder=<1 Active|2 Sold|3 Inactive|4 Other>."
         },
         {
           "id": "prospects_inactive",
@@ -2319,18 +2313,12 @@
               }
             }
           ],
-          "load": [
-            {
-              "clear": {
-                "label": "Prospects For"
-              }
-            }
-          ],
+          "load": [],
           "table": null,
           "validation": {
             "ok": true
           },
-          "note": "Loads from its filters (no Search button; Refresh reloads). Prospects For and Days limit the list: see load steps. The grid scrolls (no pager)."
+          "note": "Loads from its filters (no Search button; Refresh reloads). Prospects For (one salesperson) and Days (7 days) limit the list: add load steps to widen them once the grid reads. The grid scrolls (no pager) and is only drawn in a visible window. Its frame: crm.connectcdk.com/evo2/fresh/elead-v45/elead_track/NewProspects/Prospects.aspx?Folder=<1 Active|2 Sold|3 Inactive|4 Other>."
         },
         {
           "id": "prospects_sold",
@@ -2363,18 +2351,12 @@
               }
             }
           ],
-          "load": [
-            {
-              "clear": {
-                "label": "Prospects For"
-              }
-            }
-          ],
+          "load": [],
           "table": null,
           "validation": {
             "ok": true
           },
-          "note": "Loads from its filters (no Search button; Refresh reloads). Prospects For and Days limit the list: see load steps. The grid scrolls (no pager)."
+          "note": "Loads from its filters (no Search button; Refresh reloads). Prospects For (one salesperson) and Days (7 days) limit the list: add load steps to widen them once the grid reads. The grid scrolls (no pager) and is only drawn in a visible window. Its frame: crm.connectcdk.com/evo2/fresh/elead-v45/elead_track/NewProspects/Prospects.aspx?Folder=<1 Active|2 Sold|3 Inactive|4 Other>."
         },
         {
           "id": "prospects_other",
@@ -2407,21 +2389,20 @@
               }
             }
           ],
-          "load": [
-            {
-              "clear": {
-                "label": "Prospects For"
-              }
-            }
-          ],
+          "load": [],
           "table": null,
           "validation": {
             "ok": true
           },
-          "note": "Loads from its filters (no Search button; Refresh reloads). Prospects For and Days limit the list: see load steps. The grid scrolls (no pager)."
+          "note": "Loads from its filters (no Search button; Refresh reloads). Prospects For (one salesperson) and Days (7 days) limit the list: add load steps to widen them once the grid reads. The grid scrolls (no pager) and is only drawn in a visible window. Its frame: crm.connectcdk.com/evo2/fresh/elead-v45/elead_track/NewProspects/Prospects.aspx?Folder=<1 Active|2 Sold|3 Inactive|4 Other>."
         }
       ],
       "history": [
+        {
+          "version": 5,
+          "mappedAt": "2026-10-06T09:25:47.286Z",
+          "reason": "prospect lists read with their default filters first (the clear step removed until the grid reads)"
+        },
         {
           "version": 4,
           "mappedAt": "2026-10-06T09:11:28.688Z",
