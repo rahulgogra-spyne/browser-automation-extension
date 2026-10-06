@@ -15,7 +15,7 @@
 // A selector reaches into a web component's shadow root with " >>> ":
 //   "records-record-layout >>> div.slds-form-element > span"
 (() => {
-  const RUNTIME_VERSION = 12;
+  const RUNTIME_VERSION = 13;
   if (window.__crmRuntime?.version >= RUNTIME_VERSION) return;
 
   const STABLE_ATTRS = ['data-testid', 'data-test', 'data-qa', 'data-field', 'data-key', 'data-name', 'data-label', 'name', 'aria-label'];
@@ -1581,6 +1581,111 @@
     return fillField({ css: selectorFor(input), value: '' });
   }
 
+  // ------------------------------------------------------------ inspection
+  //
+  // The structure of this frame for someone who cannot see the page: every
+  // element as "tag#id.class[role…]" with its nesting, the captions of
+  // controls and labels, where links and clicks lead. What the page SHOWS
+  // about a person is not included: values are masked to their shape
+  // ("Xxxxx, Xxxx" -> "xxxxx, xxxx", "(651) 384-8559" -> "(999) 999-9999"),
+  // which still tells a phone from a date from an e-mail.
+
+  const shape = (text, max = 48) =>
+    clean(text)
+      .replace(/[A-Za-zÀ-ɏ]/g, 'x')
+      .replace(/\d/g, '9')
+      .slice(0, max);
+  // Captions that are part of the application, not of a record.
+  const CAPTION_EL = 'th, [role="columnheader"], label, legend, button, [role="button"], [role="tab"], [role="menuitem"], [role="option"], h1, h2, h3, h4, h5, h6, option, summary, dt, caption, [role="heading"], [role="combobox"], [aria-haspopup]';
+  const CAPTION_CLASS = /(^|[\s_-])(label|lbl|title|header|heading|caption|legend|tab|menu|nav|btn|button|field-?name|prompt)([\s_-]|$)/i;
+  const maskUrl = (url) =>
+    String(url)
+      .replace(/=([^&#]*)/g, (_, v) => `=${shape(decodeURIComponent(v.replace(/\+/g, ' ')), 30)}`)
+      .replace(/\d{3,}/g, (d) => '9'.repeat(Math.min(d.length, 8)))
+      .slice(0, 220);
+  const maskCode = (code) =>
+    String(code)
+      .replace(/(['"])((?:(?!\1).)*)\1/g, (_, q, v) => `${q}${/^[a-z]+:\/\/|\.aspx|\.html|\//i.test(v) ? maskUrl(v) : shape(v, 40)}${q}`)
+      .replace(/\d{3,}/g, (d) => '9'.repeat(Math.min(d.length, 8)))
+      .replace(/\s+/g, ' ')
+      .slice(0, 260);
+
+  function inspectPage({ maxLines = 2600, maxDepth = 28 } = {}) {
+    const lines = [];
+    const describe = (el) => {
+      const tag = el.tagName.toLowerCase();
+      const id = el.id ? `#${el.id.replace(/\d{4,}/g, '9999')}` : '';
+      const cls = typeof el.className === 'string' && el.className.trim() ? `.${el.className.trim().split(/\s+/).slice(0, 4).join('.')}` : '';
+      const attrs = [];
+      for (const a of ['role', 'type', 'name', 'aria-haspopup', 'aria-expanded', 'aria-selected', 'aria-label', 'data-testid', 'data-role', 'data-field', 'data-uid', 'placeholder', 'target', 'tabindex', 'for', 'colspan']) {
+        const v = el.getAttribute(a);
+        if (v != null && v !== '') attrs.push(`${a}=${a === 'data-uid' ? 'uid' : JSON.stringify(a === 'aria-label' && !el.matches(CAPTION_EL) ? shape(v) : v.slice(0, 60))}`);
+      }
+      if (el.getAttribute('href')) attrs.push(`href=${JSON.stringify(/^javascript:/i.test(el.getAttribute('href')) ? maskCode(el.getAttribute('href')) : maskUrl(el.getAttribute('href')))}`);
+      if (el.getAttribute('src') && (tag === 'iframe' || tag === 'frame')) attrs.push(`src=${JSON.stringify(maskUrl(el.getAttribute('src')))}`);
+      if (el.getAttribute('onclick')) attrs.push(`onclick=${JSON.stringify(maskCode(el.getAttribute('onclick')))}`);
+      if (el.hasAttribute('data-cm-click')) attrs.push('click-handler');
+      if (tag === 'input' || tag === 'textarea') attrs.push(`value=${JSON.stringify(el.type === 'checkbox' || el.type === 'radio' ? String(el.checked) : shape(el.value))}`);
+      if (tag === 'select') attrs.push(`options=${el.options.length} selected=${JSON.stringify(shape(el.options[el.selectedIndex]?.textContent ?? ''))}`);
+      if (!isVisible(el)) attrs.push('hidden');
+      else {
+        const box = el.getBoundingClientRect();
+        if (box.width && box.height && (el.matches('iframe, table, [role="grid"], [role="dialog"], form') || el.childElementCount === 0)) attrs.push(`@${Math.round(box.left)},${Math.round(box.top)} ${Math.round(box.width)}x${Math.round(box.height)}`);
+      }
+      // Its own text (not its children's).
+      const own = clean([...el.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent).join(' '));
+      let text = '';
+      const control = el.matches('a, [onclick]') && !el.closest('td, [role="gridcell"], [role="row"], [role="option"], li'); // a link of the page, not of a record
+      if (own) text = control || el.matches(CAPTION_EL) || el.closest('th, [role="columnheader"], button, [role="button"], [role="tab"], [role="menuitem"], label, legend, option, [role="option"], h1, h2, h3, h4, h5, h6, nav, [role="menu"], [role="navigation"]') || CAPTION_CLASS.test(`${el.className} ${el.id}`) ? ` "${own.slice(0, 70)}"` : ` ~"${shape(own)}"`;
+      return `${tag}${id}${cls}${attrs.length ? `[${attrs.join(' ')}]` : ''}${text}`;
+    };
+    const signature = (el) => `${el.tagName}|${typeof el.className === 'string' ? el.className.trim().split(/\s+/).slice(0, 3).join('.') : ''}|${el.childElementCount}`;
+    const walk = (el, depth) => {
+      if (lines.length >= maxLines) return;
+      const tag = el.tagName;
+      // A frame or a picture is one line (a frame's own content is its own report).
+      if (tag === 'IFRAME' || tag === 'FRAME' || tag === 'IMG') {
+        const extra = tag === 'IMG' ? `[alt=${JSON.stringify((el.getAttribute('alt') || el.getAttribute('title') || '').slice(0, 40))}]` : '';
+        lines.push(`${'  '.repeat(Math.min(depth, 40))}${describe(el)}${extra}`);
+        return;
+      }
+      if (SKIP_TAGS.has(tag) || tag === 'svg' || tag === 'path' || tag === 'BR') return;
+      lines.push(`${'  '.repeat(Math.min(depth, 40))}${describe(el)}`);
+      if (depth >= maxDepth) return;
+      const kids = [...el.children, ...(shadowOf(el) ? [...shadowOf(el).children] : [])];
+      // A run of look-alike siblings (rows of a grid, options of a list): two in full, the rest counted.
+      for (let i = 0; i < kids.length; ) {
+        let j = i;
+        while (j < kids.length && signature(kids[j]) === signature(kids[i])) j++;
+        const run = j - i;
+        if (run > 3) {
+          walk(kids[i], depth + 1);
+          walk(kids[i + 1], depth + 1);
+          lines.push(`${'  '.repeat(Math.min(depth + 1, 40))}… ${run - 2} more like the two above`);
+        } else for (let k = i; k < j; k++) walk(kids[k], depth + 1);
+        i = j;
+      }
+    };
+    if (document.body) walk(document.body, 0);
+    const grid = describeTable();
+    return {
+      url: maskUrl(location.href),
+      path: location.pathname,
+      title: document.title.replace(/\d{4,}/g, '9999'),
+      top: window === window.top,
+      size: `${innerWidth}x${innerHeight}`,
+      visibility: document.visibilityState,
+      truncated: lines.length >= maxLines,
+      grid: grid ? { container: grid.spec.container, row: grid.spec.row, headers: grid.headers, rows: grid.count, firstRowShapes: (grid.rows[0] ?? []).map((c) => shape(c, 30)) } : null,
+      emptyGrid: emptyGrid(),
+      loader: describeLoader()?.text ?? null,
+      next: Boolean(findNext({})),
+      labels: findEverywhere(document, 'label, dt, th, legend, [class*="label" i], [class*="lbl" i]').filter(isVisible).map((l) => clean(l.innerText || l.textContent).slice(0, 50)).filter((t, i, all) => t && all.indexOf(t) === i).slice(0, 200),
+      tabs: findEverywhere(document, '[role="tab"], .k-tabstrip-items li, .nav-tabs li, [class*="tab" i] > a, [class*="tab" i] > li').filter(isVisible).map((t) => clean(t.innerText || t.textContent).slice(0, 40)).filter((t, i, all) => t && all.indexOf(t) === i).slice(0, 60),
+      skeleton: lines,
+    };
+  }
+
   // A grid whose headers are weekdays or whose box is a date picker is a
   // calendar, not data.
   const WEEKDAY = /^(su|mo|tu|we|th|fr|sa|sun|mon|tue|wed|thu|fri|sat|sunday|monday|tuesday|wednesday|thursday|friday|saturday|s|m|t|w|f)$/i;
@@ -1945,6 +2050,7 @@
     frameInfo: () => ({ url: location.href, title: document.title, top: window === window.top, rows: dataRows(document).length }),
     describeTables,
     describePage,
+    inspectPage,
     readTableScrolled,
     emptyGrid,
     clearField,

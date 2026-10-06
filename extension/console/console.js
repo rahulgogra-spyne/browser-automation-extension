@@ -191,6 +191,17 @@ $('describe-tab').addEventListener('click', async () => {
     $('now-note').textContent = error.message;
   }
 });
+$('inspect-tab').addEventListener('click', async () => {
+  if (!activeSite) return ($('now-note').textContent = 'Open the CRM in a tab first.');
+  $('now-note').textContent = 'Inspecting the tab (its drop-downs are opened and closed)…';
+  try {
+    const result = await send({ type: 'inspectTab', tabId: activeSite.tabId });
+    $('now-note').textContent = `Saved Downloads/${result.filename}`;
+    await tick();
+  } catch (error) {
+    $('now-note').textContent = error.message;
+  }
+});
 $('here-capture').addEventListener('click', () => {
   if (!activeSite) return;
   if (!confirm(`Capture the list shown on ${activeSite.host}? It is read page after page in that tab, for the dealer/store the tab is on (don't use the tab meanwhile), and saved to today's CSV as it goes.`)) return;

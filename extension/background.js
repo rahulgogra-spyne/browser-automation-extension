@@ -15,7 +15,7 @@ import { buildCapture } from './lib/capture.js';
 import { findCrm, findPageType, assessExtraction, describeProblems, urlKey } from './lib/crm-config.js';
 import { localDateKey, localTimestamp } from './lib/dates.js';
 import { detectSite } from './lib/site.js';
-import { writeCsvFile } from './lib/sinks/local-downloads.js';
+import { writeCsvFile, writeTextFile } from './lib/sinks/local-downloads.js';
 import { nextPageUrl, isPagedUrl } from './lib/paging.js';
 import { followScriptLinks } from './lib/follow-links.js';
 import { adoptOpenedTab } from './lib/opened-tabs.js';
@@ -106,6 +106,8 @@ const handlers = {
     await chrome.storage.session.set({ diagnostic: [...diagnostic, ...lines].slice(-400) });
     return { lines };
   },
+  // The structure of the CRM tab, written to a file for whoever maintains the layouts.
+  inspectTab,
   // Whether the CRM tab shows a data grid now, for the capture window.
   tabGrid: async ({ tabId }) => {
     const tab = await chrome.tabs.get(tabId).catch(() => null);
@@ -181,15 +183,15 @@ function startRun({ crmId, name, phase }) {
     lists: 0, pages: 0, found: 0, total: 0, captured: 0, partial: 0, failed: 0, saved: 0, messages: 0,
     byKind: {}, byStore: {}, files: [], phase, log: [], recent: [],
   };
-  const note = (line) => {
-    stats.log.push(`${new Date().toLocaleTimeString()}  ${line}`);
+  const fullLog = []; // every line of the run, for its log file
+  const push = (line) => {
+    stats.log.push(line);
+    fullLog.push(line);
     if (stats.log.length > MAX_LOG_LINES) stats.log.splice(0, stats.log.length - MAX_LOG_LINES);
   };
+  const note = (line) => push(`${new Date().toLocaleTimeString()}  ${line}`);
   // Data lines sit under the record's line, indented, with no time stamp.
-  const data = (lines) => {
-    for (const line of lines) stats.log.push(`            ${line}`);
-    if (stats.log.length > MAX_LOG_LINES) stats.log.splice(0, stats.log.length - MAX_LOG_LINES);
-  };
+  const data = (lines) => lines.forEach((line) => push(`            ${line}`));
   const publish = async () => {
     await chrome.storage.session.set({ bulk: stats });
     // The capture page is behind the work tab during a run: the badge counts the records.
@@ -198,7 +200,7 @@ function startRun({ crmId, name, phase }) {
       await chrome.action.setBadgeText({ text: String(stats.captured) });
     }
   };
-  return { stats, note, data, seen: new Set(), grids: new Set(), pending: [], publish };
+  return { stats, note, data, fullLog, seen: new Set(), grids: new Set(), pending: [], publish };
 }
 
 const cut = (value) => {
@@ -247,6 +249,15 @@ async function finishRun(run, ctx, error = null) {
   stats.finishedAt = Date.now();
   const kinds = Object.entries(stats.byKind).map(([kind, n]) => `${n} ${kind}`).join(', ');
   run.note(error ? `Failed: ${error.message}` : `${stats.status}: ${stats.captured} captured (${kinds || 'nothing'}), ${stats.saved} saved, ${stats.messages} messages`);
+  // The whole log, beside the CSVs (the window keeps only its last lines).
+  try {
+    const logFile = folderFile(ctx.settings ?? (await getSettings()), `capture_log_${storeSlug(stats.name) || 'crm'}_${localDateKey()}_${stamp()}.txt`);
+    await writeTextFile(logFile, `${run.fullLog.join('\n')}\n`);
+    stats.logFile = logFile;
+    run.note(`Log saved → ${logFile}`);
+  } catch {
+    // the log stays in the window
+  }
   await run.publish();
   return stats;
 }
@@ -701,6 +712,54 @@ async function loadGrid(tabId, ctx, screen, { note, pressFirst = false }) {
     if (ctx.crmId && screen.id && !screen.adHoc) await saveLearnedGrid(ctx.crmId, screen.id, best.table);
   }
   return { table: best.table, read: best.read, learned: best.learned, pressed: best.pressed };
+}
+
+// A file beside the CSVs: "<folder>/<name>".
+const folderFile = (settings, name) => csvFileName(settings, 'x').replace(/[^/]*$/, name);
+const stamp = () => new Date().toTimeString().slice(0, 8).replace(/:/g, '');
+
+// Writes the structure of a tab to <folder>/inspect_<host>_<time>.json:
+// every frame's skeleton (tags, ids, classes, captions, link and click
+// targets; what the page shows about a person is masked to its shape), the
+// grid found, and each drop-down at the top with what it lists (opened and
+// closed again, nothing chosen). For describing a CRM that cannot be seen.
+async function inspectTab({ tabId }) {
+  const tab = await chrome.tabs.get(tabId).catch(() => null);
+  if (!tab || !/^https?:/i.test(tab.url || '')) throw new Error('Open the CRM in a tab first.');
+  const settings = await getSettings();
+  await chrome.tabs.update(tabId, { active: true }).catch(() => {});
+  const tree = (await chrome.webNavigation.getAllFrames({ tabId }).catch(() => [])) ?? [];
+  const frames = (await inFrames(tabId, () => window.__crmRuntime?.inspectPage?.() ?? null))
+    .filter((f) => f.result && f.result.skeleton.length > 2)
+    .map((f) => ({ frameId: f.frameId, parentFrameId: tree.find((t) => t.frameId === f.frameId)?.parentFrameId ?? null, ...f.result }));
+  const dropdowns = [];
+  for (const f of (await inFrames(tabId, () => window.__crmRuntime?.storeDropdowns?.() ?? [])).filter((x) => x.result?.length)) {
+    for (const candidate of f.result) {
+      const items = await probeDropdown(tabId, f.frameId, candidate.control);
+      // Dealer names are kept; any other list (people, statuses) is masked to its shape.
+      const like = dealerLike(items);
+      const keep = like >= Math.max(1, Math.ceil(items.length * 0.5));
+      dropdowns.push({
+        frameId: f.frameId, caption: keep || candidate.hint ? candidate.caption : candidate.caption.replace(/[A-Za-z]/g, 'x').replace(/\d/g, '9'),
+        looksLikeStores: keep, hint: candidate.hint, control: candidate.control, markup: candidate.html,
+        entries: items.map((i) => ({ text: keep ? i.raw || i.text : (i.raw || i.text).replace(/[A-Za-z]/g, 'x').replace(/\d/g, '9'), nav: keep ? i.nav : { css: i.nav?.css } })),
+      });
+    }
+  }
+  const selects = (await inFrames(tabId, () => window.__crmRuntime?.describeStores?.() ?? null)).filter((f) => f.result).map((f) => ({ frameId: f.frameId, ...f.result }));
+  const host = new URL(tab.url).host;
+  const report = { inspectedAt: new Date().toISOString(), extension: chrome.runtime.getManifest().version, tab: { url: tab.url.replace(/=([^&#]*)/g, '=…'), title: tab.title }, frameTree: tree.map((t) => ({ frameId: t.frameId, parentFrameId: t.parentFrameId, url: t.url.replace(/=([^&#]*)/g, '=…').slice(0, 200) })), storeSelects: selects, dropdowns, frames };
+  const filename = folderFile(settings, `inspect_${host.replace(/[^a-z0-9.-]/gi, '-')}_${localDateKey()}_${stamp()}.json`);
+  await writeTextFile(filename, JSON.stringify(report, null, 1), 'application/json');
+  const lines = [
+    `${new Date().toLocaleTimeString()}  Inspected ${tab.url.split('?')[0]} → Downloads/${filename}`,
+    `            ${frames.length} frame(s): ${frames.map((f) => `${f.path} (${f.skeleton.length} elements${f.grid ? `, grid ${f.grid.rows} rows` : ''})`).join('; ')}`,
+    `            drop-downs at the top: ${dropdowns.map((d) => `"${d.caption}" → ${d.entries.length} entries${d.looksLikeStores ? ' (stores)' : ''}`).join('; ') || 'none'}`,
+  ];
+  const { diagnostic = [] } = await chrome.storage.session.get('diagnostic');
+  await chrome.storage.session.set({ diagnostic: [...diagnostic, ...lines].slice(-400) });
+  if (work.consoleTabId != null) await chrome.tabs.update(work.consoleTabId, { active: true }).catch(() => {});
+  return { filename, frames: frames.length, dropdowns: dropdowns.length };
 }
 
 // A short account of what is on a tab, for the log when a screen comes out

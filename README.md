@@ -114,6 +114,12 @@ A screen is given time before it is judged: the grid is looked for every second 
 
 A grid that reads only a few rows with most columns empty (a search-criteria form laid out as a table, or a grid not loaded yet) is treated as not loaded: Search is pressed and the better reading kept. Rows made mostly of input boxes are never taken for data.
 
+## Inspecting a CRM (for building or fixing its layout)
+
+**Inspect this tab** in the capture page saves `inspect_<host>_<date>_<time>.json` beside the CSVs: for every frame of the open CRM tab, its skeleton (each element as `tag#id.class[role…]` with its nesting, the captions of controls, labels and headers, where links and clicks lead), the grid it would read, and each drop-down at the top with what it lists (opened and closed again, nothing chosen). What the page shows about a person is not in it: values are masked to their shape (`xxxxx, xxxx`, `(999) 999-9999`, `99/99/9999`); dealer names in the store drop-down are kept. It is what to hand over when a CRM, a screen or a record page needs a layout and cannot be looked at directly.
+
+Every run also saves its whole log as `capture_log_<crm>_<date>_<time>.txt` in the same folder.
+
 ## Limits
 
 - Caps per run: 200 pages per list, 5,000 records, 15 message pages per record; the log keeps the last 4,000 lines (the CSV holds everything).

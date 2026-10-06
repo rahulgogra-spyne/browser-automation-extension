@@ -4,8 +4,13 @@
 //
 // Sinks share one shape: writeCsvFile(filename, csv). An S3 sink can sit next
 // to this one later and be called from the same place in background.js.
-export async function writeCsvFile(filename, csv) {
-  const url = `data:text/csv;charset=utf-8,${encodeURIComponent(`﻿${csv}`)}`;
+export const writeCsvFile = (filename, csv) => writeFile(filename, `\ufeff${csv}`, 'text/csv');
+// Any text file (a run's log, an inspection report), the same way.
+export const writeTextFile = (filename, text, mime = 'text/plain') => writeFile(filename, text, mime);
+
+async function writeFile(filename, content, mime) {
+  const url = `data:${mime};charset=utf-8,${encodeURIComponent(content)}`;
+
   const id = await chrome.downloads.download({ url, filename, conflictAction: 'overwrite', saveAs: false });
   await waitUntilDone(id);
   // Drop the entry from Chrome's download list so it doesn't fill up with
