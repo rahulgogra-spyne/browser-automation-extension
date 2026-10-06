@@ -581,9 +581,17 @@ async function replayLoadSteps(tabId, steps = []) {
       await new Promise((r) => setTimeout(r, step.wait));
       continue;
     }
-    if (step.fill) {
-      const done = (await inFrames(tabId, (spec) => window.__crmRuntime?.fillField?.(spec) ?? false, [step.fill])).some((f) => f.result);
-      if (!done) return `fill ${step.fill.label || step.fill.css}`;
+    const fill = step.fill ?? step.select;
+    if (fill) {
+      const done = (await inFrames(tabId, (spec) => window.__crmRuntime?.fillField?.(spec) ?? false, [fill])).some((f) => f.result);
+      if (!done) return `${step.fill ? 'fill' : 'select'} ${fill.label || fill.css}`;
+      await settleQuick(tabId);
+      continue;
+    }
+    if (step.clear) {
+      const done = (await inFrames(tabId, (spec) => window.__crmRuntime?.clearField?.(spec) ?? false, [step.clear])).some((f) => f.result);
+      if (!done) return `clear ${step.clear.label || step.clear.css}`;
+      await settleTab(tabId);
       continue;
     }
     if (step.click) {
@@ -926,7 +934,8 @@ async function walkScreen(run, ctx, screen, tabId, queue, { kind = null, store =
     return;
   }
   run.grids.add(gridId);
-  const readNow = async () => (await inFrames(tabId, (spec) => window.__crmRuntime?.readTable?.(spec) ?? null, [table])).map((f) => f.result).find((r) => r?.rows?.length) ?? null;
+  // Every row of the page, scrolling a grid that only renders what is in view.
+  const readNow = async () => (await inFrames(tabId, async (spec) => (await window.__crmRuntime?.readTableScrolled?.(spec)) ?? null, [table])).map((f) => f.result).find((r) => r?.rows?.length) ?? null;
   // A grid with no pager may grow as it is scrolled ("Show more", infinite scroll): all of it first.
   const grown = await inFrames(
     tabId,
@@ -941,8 +950,9 @@ async function walkScreen(run, ctx, screen, tabId, queue, { kind = null, store =
   if (rounds > 1) note(`"${screen.entity}": expanded the grid in place (${rounds} rounds of "show more"/scrolling)`);
   let lastSignature = null;
   for (let pageNo = 0; pageNo < MAX_PAGES_PER_LIST && !cancelRequested; pageNo++) {
-    const read = pageNo === 0 && rounds <= 1 ? first.read : await readNow();
+    const read = await readNow();
     if (!read) break;
+    if (read.scrolled && read.rows.length > first.read.rows.length) note(`"${screen.entity}": scrolled the grid to read all ${read.rows.length} rows`);
     if (read.signature === lastSignature) break; // "next" changed nothing: the last page
     lastSignature = read.signature;
     stats.pages++;

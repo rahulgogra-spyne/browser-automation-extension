@@ -2076,7 +2076,7 @@
         "tasks",
         "vehicles"
       ],
-      "version": 3,
+      "version": 4,
       "mappedAt": "2026-10-05T14:01:30.509Z",
       "mappedBy": "extension (server)",
       "pageTypes": [
@@ -2245,9 +2245,9 @@
           }
         },
         {
-          "id": "prospect_search_screen",
+          "id": "prospects_active",
           "role": "screen",
-          "entity": "Prospect Search",
+          "entity": "Prospects – Active",
           "dataset": "customers",
           "path": [
             {
@@ -2275,17 +2275,23 @@
               }
             }
           ],
-          "load": [],
+          "load": [
+            {
+              "clear": {
+                "label": "Prospects For"
+              }
+            }
+          ],
           "table": null,
-          "note": "The results grid is empty until Search is pressed: the capture presses it (or add load steps: fill a filter, click Search) and learns the grid from its headers.",
           "validation": {
             "ok": true
-          }
+          },
+          "note": "Loads from its filters (no Search button; Refresh reloads). Prospects For and Days limit the list: see load steps. The grid scrolls (no pager)."
         },
         {
-          "id": "prospect_search_screen_2",
+          "id": "prospects_inactive",
           "role": "screen",
-          "entity": "Prospects",
+          "entity": "Prospects – Inactive",
           "dataset": "customers",
           "path": [
             {
@@ -2303,16 +2309,124 @@
                 "kind": "nav",
                 "text": "Prospects"
               }
+            },
+            {
+              "label": "Inactive",
+              "nav": {
+                "css": "a[role=\"menuitem\"].ui-menu-item-wrapper",
+                "kind": "nav",
+                "text": "Inactive"
+              }
             }
           ],
-          "load": [],
+          "load": [
+            {
+              "clear": {
+                "label": "Prospects For"
+              }
+            }
+          ],
           "table": null,
           "validation": {
             "ok": true
-          }
+          },
+          "note": "Loads from its filters (no Search button; Refresh reloads). Prospects For and Days limit the list: see load steps. The grid scrolls (no pager)."
+        },
+        {
+          "id": "prospects_sold",
+          "role": "screen",
+          "entity": "Prospects – Sold",
+          "dataset": "customers",
+          "path": [
+            {
+              "label": "CRM",
+              "nav": {
+                "css": "div.bPuebU",
+                "kind": "nav",
+                "text": "CRM"
+              }
+            },
+            {
+              "label": "Prospects",
+              "nav": {
+                "css": "span.icon-address-book.icon-address-book-black",
+                "kind": "nav",
+                "text": "Prospects"
+              }
+            },
+            {
+              "label": "Sold",
+              "nav": {
+                "css": "a[role=\"menuitem\"].ui-menu-item-wrapper",
+                "kind": "nav",
+                "text": "Sold"
+              }
+            }
+          ],
+          "load": [
+            {
+              "clear": {
+                "label": "Prospects For"
+              }
+            }
+          ],
+          "table": null,
+          "validation": {
+            "ok": true
+          },
+          "note": "Loads from its filters (no Search button; Refresh reloads). Prospects For and Days limit the list: see load steps. The grid scrolls (no pager)."
+        },
+        {
+          "id": "prospects_other",
+          "role": "screen",
+          "entity": "Prospects – Other",
+          "dataset": "customers",
+          "path": [
+            {
+              "label": "CRM",
+              "nav": {
+                "css": "div.bPuebU",
+                "kind": "nav",
+                "text": "CRM"
+              }
+            },
+            {
+              "label": "Prospects",
+              "nav": {
+                "css": "span.icon-address-book.icon-address-book-black",
+                "kind": "nav",
+                "text": "Prospects"
+              }
+            },
+            {
+              "label": "Other",
+              "nav": {
+                "css": "a[role=\"menuitem\"].ui-menu-item-wrapper",
+                "kind": "nav",
+                "text": "Other"
+              }
+            }
+          ],
+          "load": [
+            {
+              "clear": {
+                "label": "Prospects For"
+              }
+            }
+          ],
+          "table": null,
+          "validation": {
+            "ok": true
+          },
+          "note": "Loads from its filters (no Search button; Refresh reloads). Prospects For and Days limit the list: see load steps. The grid scrolls (no pager)."
         }
       ],
       "history": [
+        {
+          "version": 4,
+          "mappedAt": "2026-10-06T09:11:28.688Z",
+          "reason": "prospect lists Active/Inactive/Sold/Other; filters widened by load steps; scrolling grid"
+        },
         {
           "version": 3,
           "mappedAt": "2026-10-06T08:18:37.026Z",

@@ -91,7 +91,7 @@ Re-running the same day updates existing rows (same `crm_record_id`) instead of 
     "table": null }
   ```
 
-  A `nav` step needs only `text` (the caption); `css` narrows it when two things share a caption. Column headers become row keys (`Name` → `full_name`, `Cell` → `phone_mobile`, `Stock #` → `stock_number`, anything else slugified).
+  Other load steps: `{ "select": { "label": "Days", "value": "All" } }` picks a drop-down option, `{ "clear": { "label": "Prospects For" } }` presses a filter's × (or empties it). A `nav` step needs only `text` (the caption); `css` narrows it when two things share a caption. Column headers become row keys (`Name` → `full_name`, `Cell` → `phone_mobile`, `Stock #` → `stock_number`, anything else slugified).
 
 Rules are CSS selectors (with ` >>> ` to step into shadow roots and address-less frames), label lookups, and regexes; each field has fallbacks. A record the layout does not fully fit (a tab gone, a required field empty) is still saved with whatever was read and counted under **layout partly fit** in the window.
 
@@ -99,7 +99,7 @@ To add or change a CRM, edit the file and reload the extension (`chrome://extens
 
 ## CDK Unify (`app-unify.app.connectcdk.com`)
 
-The bundled entry matches `app-unify.app.connectcdk.com` and `crm.connectcdk.com`. Its screens start from the launcher (`/applications`), press the **CRM** card (which opens the CRM in a new tab; the capture follows it in its work tab), then the menu entries: **Vehicle Search** (inventory grid, read as is) and **Prospects → Active** / **Prospects** (empty until **Search** is pressed: the capture presses it, learns the results grid from its headers, and reads it page after page). If the account has several dealerships, the dealership switcher in the CRM's header is used and each dealership is captured to its own files.
+The bundled entry matches `app-unify.app.connectcdk.com` and `crm.connectcdk.com`. Its screens start from the launcher (`/applications`), press the **CRM** card, then the menu entries: **Vehicle Search** (its search-criteria table is skipped, Search pressed, the inventory grid learned) and **Prospects → Active / Inactive / Sold / Other**. Those prospect lists load from their filters (no Search button; **Refresh** reloads them) and are limited by default to one salesperson ("Prospects For") and the last 7 days ("Days"): the entry's load steps clear "Prospects For"; widen "Days" with a `select` step once its options are known. The grid scrolls instead of paging and renders only the rows in view: it is scrolled and read step by step until every row has been seen. The dealership switcher in the CRM's header drives the per-store capture.
 
 If a screen does not come out right, open it yourself in the CRM with the filters you want and use **Capture this tab**; the log says what was found (`Found N stores…`, `pressed "Search"…`, `learned the grid…`), and the `path` / `load` / `stores` settings of the entry can be tuned from that. **Describe this tab** writes to the log what the extension sees on the open CRM tab — every frame with its grids (columns, row count, first row), the Search button it would press, store switcher candidates, selects and buttons — which is what to send when a screen comes out wrong. A capture also writes that report by itself when a menu step is not found or a screen shows no grid.
 

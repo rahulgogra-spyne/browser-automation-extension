@@ -15,7 +15,7 @@
 // A selector reaches into a web component's shadow root with " >>> ":
 //   "records-record-layout >>> div.slds-form-element > span"
 (() => {
-  const RUNTIME_VERSION = 6;
+  const RUNTIME_VERSION = 7;
   if (window.__crmRuntime?.version >= RUNTIME_VERSION) return;
 
   const STABLE_ATTRS = ['data-testid', 'data-test', 'data-qa', 'data-field', 'data-key', 'data-name', 'data-label', 'name', 'aria-label'];
@@ -1188,6 +1188,57 @@
     return { rows: filled, signature: filled.slice(0, 3).map((r) => r.cells.join('|')).join('\n') };
   }
 
+  // Every row of a grid that scrolls inside its own box, including grids
+  // that only render the rows in view and recycle them as they scroll
+  // (Kendo, ag-Grid, virtual lists): the box is scrolled a screen at a time
+  // and the rows read at each step, kept apart by their content. Same shape
+  // as readTable(); rows are in the order first seen.
+  async function readTableScrolled(spec, { maxSteps = 400 } = {}) {
+    const first = readTable(spec);
+    const rowsSel = spec.row ? `${spec.container} ${spec.row.replace(/^:scope\s*>?\s*/, '')}` : `${spec.container} tr, ${spec.container} [role="row"]`;
+    const scroller = scrollerOf(rowsSel);
+    if (!scroller || scroller.scrollHeight <= scroller.clientHeight + 4) return first;
+    const seen = new Map();
+    const take = (read) => {
+      let fresh = 0;
+      for (const row of read.rows) {
+        const id = row.cells.join('\u0001');
+        if (!seen.has(id)) {
+          seen.set(id, row);
+          fresh++;
+        }
+      }
+      return fresh;
+    };
+    take(first);
+    const top = scroller.scrollTop;
+    let idle = 0;
+    for (let step = 0; step < maxSteps; step++) {
+      const before = scroller.scrollTop;
+      scroller.scrollTop = before + Math.max(40, scroller.clientHeight * 0.8);
+      scroller.dispatchEvent(new Event('scroll'));
+      await sleep(120);
+      await waitQuiet({ quietMs: 300, timeoutMs: 4000, minMs: 0 });
+      const fresh = take(readTable(spec));
+      const atEnd = scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 2 || scroller.scrollTop === before;
+      idle = fresh ? 0 : idle + 1;
+      if (atEnd && (idle >= 1 || fresh === 0)) {
+        // One more look at the very end, then done.
+        scroller.scrollTop = scroller.scrollHeight;
+        scroller.dispatchEvent(new Event('scroll'));
+        await sleep(150);
+        await waitQuiet({ quietMs: 300, timeoutMs: 3000, minMs: 0 });
+        take(readTable(spec));
+        break;
+      }
+      if (idle >= 6) break;
+    }
+    scroller.scrollTop = top;
+    scroller.dispatchEvent(new Event('scroll'));
+    const rows = [...seen.values()];
+    return { rows, signature: first.signature, scrolled: true };
+  }
+
   // The pager's "next" control when there is one and it is enabled. near: the
   // selector of the list being paged; only a control close to it counts (the
   // nearest one around it), never a "Next" elsewhere on the page (a setup
@@ -1419,6 +1470,36 @@
       return null;
     }
   };
+
+  // Clears a filter field named by { css } or { label }: its own × / clear
+  // button when it has one (a chip-style picker), else its value.
+  function clearField(spec) {
+    let field = null;
+    try {
+      if (spec.css) field = findAll(spec.css).find(isVisible) ?? null;
+    } catch {
+      field = null;
+    }
+    const CLEARER = 'button, [role="button"], [aria-label], [title], svg, i, span';
+    const isClearer = (el) => isVisible(el) && /^(clear|×|✕|✖|x|remove|reset|clear (all|selection|filter))$/i.test(clean(el.getAttribute('aria-label') || el.getAttribute('title') || el.innerText || el.textContent));
+    if (!field && spec.label) {
+      const want = normLabel(spec.label);
+      const labelled = findEverywhere(document, 'label, legend, span, div, p').find((el) => isVisible(el) && el.children.length <= 1 && normLabel(el.textContent) === want);
+      // The field is the smallest box around the label that holds an input or a clear button.
+      for (let node = labelled && parentOf(labelled), up = 0; node && node !== document.body && up < 5 && !field; node = parentOf(node), up++) {
+        if (findEverywhere(node, CLEARER).some(isClearer) || findEverywhere(node, 'input:not([type="hidden"]), select, textarea').some(isVisible)) field = node;
+      }
+    }
+    if (!field) return false;
+    const clearer = findEverywhere(field, CLEARER).find(isClearer);
+    if (clearer) {
+      press(clearer);
+      return true;
+    }
+    const input = field.matches('input, select, textarea') ? field : findEverywhere(field, 'input:not([type="hidden"]), select, textarea').find(isVisible);
+    if (!input) return false;
+    return fillField({ css: selectorFor(input), value: '' });
+  }
 
   // A grid whose headers are weekdays or whose box is a date picker is a
   // calendar, not data.
@@ -1781,5 +1862,7 @@
     frameInfo: () => ({ url: location.href, title: document.title, top: window === window.top, rows: dataRows(document).length }),
     describeTables,
     describePage,
+    readTableScrolled,
+    clearField,
   };
 })();
