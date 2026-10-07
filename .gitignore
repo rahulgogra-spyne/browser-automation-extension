@@ -1,0 +1,26 @@
+node_modules/
+.pnpm-store/
+.output/
+.output-e2e/
+.wxt/
+test-results/
+playwright-report/
+blob-report/
+*.log
+.DS_Store
+# Chrome Web Store API credentials from `wxt submit init`
+.env.submit
+.env
+
+*.tsbuildinfo
+
+# Agent-session state (checkpoints, delegate specs); not part of the product
+.claude/
+test-results/
+playwright-report/
+
+# Installable copy for loading unpacked into your own Chrome (pnpm build, then copied)
+build/
+
+# Extension signing key (manifest key below is its public half)
+.keys/

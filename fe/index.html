@@ -1,0 +1,410 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Connect your DMS</title>
+    <!--
+      Reference front end for VIN Flow: what the product page does to detect the extension, start
+      the flow and receive the result. The protocol is in lib/protocol.ts. Serve it from an origin
+      listed in externally_connectable (localhost works out of the box): `pnpm fe`.
+    -->
+    <style>
+      /* The same quiet language as the extension's panel: neutral greys, hairlines, colour only where it means something. */
+      :root {
+        color-scheme: light dark;
+        --bg: oklch(0.985 0 0);
+        --card: oklch(1 0 0);
+        --surface: oklch(0.965 0 0);
+        --fg: oklch(0.2 0 0);
+        --muted: oklch(0.52 0 0);
+        --line: oklch(0.91 0 0);
+        --accent: oklch(0.55 0.17 258);
+        --warn: oklch(0.53 0.14 62);
+        --ok: oklch(0.55 0.15 152);
+        --danger: oklch(0.55 0.2 27);
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: oklch(0.16 0 0);
+          --card: oklch(0.19 0 0);
+          --surface: oklch(0.23 0 0);
+          --fg: oklch(0.93 0 0);
+          --muted: oklch(0.65 0 0);
+          --line: oklch(0.27 0 0);
+          --accent: oklch(0.72 0.14 258);
+          --warn: oklch(0.8 0.14 78);
+          --ok: oklch(0.75 0.15 152);
+          --danger: oklch(0.72 0.17 25);
+        }
+      }
+      * { box-sizing: border-box; }
+      body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; -webkit-font-smoothing: antialiased; }
+      main { max-width: 640px; margin: 56px auto; padding: 0 20px; }
+      h1 { font-size: 22px; font-weight: 600; letter-spacing: -0.015em; margin: 0; }
+      p { margin: 0; }
+      .sub { color: var(--muted); margin: 6px 0 28px; }
+      .muted { color: var(--muted); }
+      .error { color: var(--danger); margin-top: 12px; }
+      :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+      [hidden] { display: none !important; }
+
+      /* One card: a header line (state, then time or version), the body, and a footer band for the action. */
+      .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+      .body { padding: 18px 20px 20px; }
+      .head { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+      .head strong { font-size: 15px; font-weight: 600; letter-spacing: -0.01em; }
+      .meta { margin-left: auto; color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
+      .foot { display: flex; align-items: center; gap: 16px; padding: 12px 20px; border-top: 1px solid var(--line); background: var(--bg); color: var(--muted); font-size: 13px; }
+      .foot button { margin-left: auto; flex: none; }
+
+      .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: none; }
+      .dot.ok { background: var(--ok); }
+      #running .dot { background: var(--accent); animation: pulse 1.4s ease-in-out infinite; }
+      #running[data-state="handoff"] .dot { background: var(--warn); }
+      #running[data-state="handoff"] #running-title { color: var(--warn); }
+      #running[data-state="busy"] .dot { background: var(--muted); }
+      #failed[data-kind="error"] .dot { background: var(--danger); }
+      #failed[data-kind="error"] #failed-title { color: var(--danger); }
+      @keyframes pulse { 50% { opacity: 0.3; } }
+
+      button { font: inherit; font-weight: 500; height: 36px; padding: 0 16px; border: 1px solid transparent; border-radius: 8px; cursor: pointer; background: var(--fg); color: var(--bg); transition: opacity 0.15s, background-color 0.15s; }
+      button:hover { opacity: 0.85; }
+      button:active { opacity: 0.7; }
+      button.secondary { background: transparent; color: var(--fg); border-color: var(--line); }
+      button.secondary:hover { opacity: 1; background: var(--surface); }
+      button.ghost { height: 30px; padding: 0 10px; background: transparent; color: var(--muted); font-size: 13px; }
+      button.ghost:hover { opacity: 1; background: var(--surface); color: var(--fg); }
+      .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+      code { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--surface); padding: 2px 5px; border-radius: 4px; }
+      ol { margin: 10px 0 0; padding-left: 20px; }
+      li + li { margin-top: 6px; }
+      li::marker { color: var(--muted); }
+
+      /* Your turn: the agent's own words, then the two ways on. */
+      .turn { margin-top: 10px; }
+      #turn-message { font-size: 16px; line-height: 1.45; }
+      .turn .muted { margin-top: 12px; font-size: 13px; }
+
+      /* The tab in use, as a row across the card. */
+      .tab { display: flex; align-items: center; gap: 12px; margin: 16px -20px 0; padding: 14px 20px 0; border-top: 1px solid var(--line); }
+      .tab img { width: 16px; height: 16px; border-radius: 3px; flex: none; }
+      .tab .t { min-width: 0; flex: 1; }
+      .tab .t div { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .tab .t .muted { font-size: 13px; }
+      #running[data-state="handoff"] #tab-go { display: none; } /* the button above already goes there */
+      .log { margin: 12px 0 0; padding: 0; list-style: none; font-size: 13px; color: var(--muted); }
+      .log:empty { display: none; }
+      .log li + li { margin-top: 2px; }
+      .log li:last-child { color: var(--fg); }
+
+      /* The result: fields, then each list of records as a table running edge to edge. */
+      dl { display: grid; grid-template-columns: max-content 1fr; gap: 6px 24px; margin: 16px 0 0; }
+      dt { color: var(--muted); }
+      dd { margin: 0; overflow-wrap: anywhere; }
+      .records { margin-top: 22px; }
+      .records h3 { display: flex; align-items: baseline; gap: 6px; margin: 0 0 8px; font-size: 14px; font-weight: 500; }
+      .count { color: var(--muted); font-size: 13px; font-weight: 400; font-variant-numeric: tabular-nums; }
+      .scroll { max-height: 320px; overflow: auto; margin: 0 -20px -20px; border-top: 1px solid var(--line); }
+      table { border-collapse: collapse; width: 100%; font-size: 13px; }
+      th, td { padding: 8px 12px; text-align: left; white-space: nowrap; }
+      th { position: sticky; top: 0; z-index: 1; background: var(--card); color: var(--muted); font-weight: 500; box-shadow: inset 0 -1px 0 var(--line); }
+      tbody tr + tr td { border-top: 1px solid var(--line); }
+      th:first-child, td:first-child { position: sticky; left: 0; padding-left: 20px; background: var(--card); }
+      th:first-child { z-index: 2; }
+      td:first-child { font-weight: 500; font-variant-numeric: tabular-nums; }
+      th:last-child, td:last-child { padding-right: 20px; }
+
+      /* Demo only: a real product already knows the customer's DMS. */
+      .demo { display: flex; align-items: center; gap: 10px; margin-top: 20px; color: var(--muted); font-size: 13px; }
+      .demo select { font: inherit; height: 28px; padding: 0 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--card); color: var(--fg); }
+      .demo:has(select:empty) { display: none; } /* filled in once the extension answers */
+
+      @media (prefers-reduced-motion: reduce) {
+        #running .dot { animation: none; }
+        button { transition: none; }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Connect <span class="dms-name">your DMS</span></h1>
+      <p class="sub">We pull your dealership data from <span class="dms-name">your DMS</span> for you. You only sign in.</p>
+
+      <section class="card" id="checking"><div class="body muted">Checking for the VIN Flow extension…</div></section>
+
+      <section class="card" id="install" hidden>
+        <div class="body">
+          <div class="head"><span class="dot"></span><strong>Install the VIN Flow extension</strong></div>
+          <ol>
+            <li>Open <code>chrome://extensions</code> and turn on Developer mode.</li>
+            <li>Click <strong>Load unpacked</strong> and pick the <code>vin-flow/build/vin-flow-chrome</code> folder.</li>
+          </ol>
+        </div>
+        <div class="foot">This page notices the install by itself.</div>
+      </section>
+
+      <section class="card" id="ready" hidden>
+        <div class="body">
+          <div class="head"><span class="dot ok"></span><strong>VIN Flow is installed</strong><span class="meta" id="version"></span></div>
+          <p id="summary"></p>
+          <p class="error" id="start-error" hidden></p>
+        </div>
+        <div class="foot">
+          <span>It opens <span class="dms-name">your DMS</span> in a new tab. You can stop it at any time.</span>
+          <button id="start">Start</button>
+        </div>
+      </section>
+
+      <section class="card" id="running" hidden>
+        <div class="body">
+          <div class="head"><span class="dot"></span><strong id="running-title">Working</strong><span class="meta" id="elapsed"></span></div>
+          <div class="turn" id="turn" hidden>
+            <p id="turn-message"></p>
+            <div class="actions">
+              <button id="go">Go to the <span class="dms-name">DMS</span> tab</button>
+              <button class="secondary" id="continue">I'm done, continue</button>
+            </div>
+            <p class="muted">VIN Flow can't see what you type there, and picks up by itself once you're through.</p>
+          </div>
+          <div class="tab" id="tab" hidden>
+            <img id="tab-icon" alt="" />
+            <div class="t"><div id="tab-title"></div><div class="muted" id="tab-host"></div></div>
+            <button class="ghost" id="tab-go">Go to tab</button>
+          </div>
+          <ul class="log" id="log"></ul>
+        </div>
+        <div class="foot">
+          <span>Each step also shows in the VIN Flow panel beside the <span class="dms-name">DMS</span> tab.</span>
+          <button class="secondary" id="stop">Stop</button>
+        </div>
+      </section>
+
+      <section class="card" id="done" hidden>
+        <div class="body">
+          <div class="head"><span class="dot ok"></span><strong>Done</strong><span class="meta" id="done-elapsed"></span></div>
+          <p class="muted">This is the data your backend would receive.</p>
+          <dl id="result"></dl>
+          <div id="records"></div>
+        </div>
+        <div class="foot"><button class="secondary" id="again">Run again</button></div>
+      </section>
+
+      <section class="card" id="failed" hidden>
+        <div class="body">
+          <div class="head"><span class="dot"></span><strong id="failed-title">Couldn't finish</strong></div>
+          <p id="failed-message"></p>
+        </div>
+        <div class="foot"><button id="retry">Try again</button></div>
+      </section>
+
+      <!-- Your product knows the customer's DMS; this demo takes it from ?dms= or this picker. -->
+      <label class="demo">Customer's DMS (set by your product) <select id="dms"></select></label>
+    </main>
+
+    <script>
+      // The extension's fixed ID (pinned by the manifest key). The Chrome Web Store assigns a new
+      // one on publish; change it here then.
+      const EXTENSION_ID = 'pemgbfmmbggmaogmcdjnpkjnjjleppjo';
+      const $ = (id) => document.getElementById(id);
+      const views = ['checking', 'install', 'ready', 'running', 'done', 'failed'];
+      const show = (view) => views.forEach((v) => ($(v).hidden = v !== view));
+
+      /** chrome.runtime exists on this page only if some installed extension lists it; ours answers hello. */
+      function send(command) {
+        return new Promise((resolve) => {
+          const runtime = window.chrome && window.chrome.runtime;
+          if (!runtime || !runtime.sendMessage) return resolve(null);
+          try {
+            runtime.sendMessage(EXTENSION_ID, command, (reply) => resolve(window.chrome.runtime.lastError ? null : reply));
+          } catch {
+            resolve(null);
+          }
+        });
+      }
+
+      let port = null;
+      async function detect() {
+        const hello = await send({ type: 'hello' });
+        if (!hello) {
+          show('install');
+          return setTimeout(detect, 1500);
+        }
+        $('version').textContent = `v${hello.version}`;
+        if (!Array.isArray(hello.flows)) {
+          // An older extension that predates per-DMS flows.
+          $('failed-title').textContent = 'Update VIN Flow';
+          $('failed-message').textContent = 'This page needs a newer VIN Flow extension. Update it, then reload this page.';
+          return show('failed');
+        }
+        flows = hello.flows;
+        const picker = $('dms');
+        if (!picker.options.length) {
+          for (const f of flows) picker.add(new Option(f.dmsName, f.dms));
+          // A DMS the extension doesn't know yet still goes in, so the product can show the extension's answer.
+          if (!flows.some((f) => f.dms === dms)) picker.add(new Option(dms, dms));
+          picker.value = dms;
+          picker.onchange = () => pickDms(picker.value);
+        }
+        pickDms(dms);
+        listen();
+        if (hello.state === 'idle') show('ready');
+      }
+
+      /** Progress and results arrive on a port; reconnect if the extension restarts. */
+      function listen() {
+        port = window.chrome.runtime.connect(EXTENSION_ID, { name: 'vin-flow' });
+        port.onMessage.addListener(onEvent);
+        port.onDisconnect.addListener(() => {
+          port = null;
+          setTimeout(detect, 500);
+        });
+      }
+
+      let startedAt = 0;
+      let ticker = null;
+      const since = () => {
+        const s = Math.round((Date.now() - startedAt) / 1000);
+        return s < 60 ? `${s}s` : `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+      };
+      function tick(on) {
+        clearInterval(ticker);
+        if (!on) return;
+        startedAt ||= Date.now();
+        ticker = setInterval(() => ($('elapsed').textContent = since()), 500);
+      }
+
+      function onEvent(event) {
+        switch (event.type) {
+          case 'tab': {
+            $('tab').hidden = !event.tab;
+            if (!event.tab) return;
+            $('tab-title').textContent = event.tab.title;
+            $('tab-host').textContent = (() => { try { return new URL(event.tab.url).host; } catch { return event.tab.url; } })();
+            $('tab-icon').src = event.tab.favIconUrl || 'data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22/>';
+            $('tab-icon').hidden = !event.tab.favIconUrl;
+            return;
+          }
+          case 'state':
+            tick(event.state !== 'idle');
+            $('dms').disabled = event.state !== 'idle'; // the DMS can't change under a running flow
+            if (event.state === 'idle') {
+              if (!$('running').hidden) show('ready'); // a run that wasn't ours ended
+              return;
+            }
+            if (event.dms && event.dms !== dms) {
+              // Busy with another tab's run.
+              const other = (flows.find((f) => f.dms === event.dms) || {}).dmsName || event.dms;
+              $('running-title').textContent = `VIN Flow is busy with a ${other} run`;
+              $('running').dataset.state = 'busy';
+              $('turn').hidden = true;
+              return show('running');
+            }
+            $('turn').hidden = event.state !== 'handoff';
+            $('running').dataset.state = event.state;
+            $('running-title').textContent = event.state === 'handoff' ? `Waiting for you in ${dmsName()}` : `Working in ${dmsName()}`;
+            return show('running');
+          case 'handoff':
+            $('turn-message').textContent = event.message;
+            $('turn').hidden = false;
+            return;
+          case 'log': {
+            const li = document.createElement('li');
+            li.textContent = event.text;
+            $('log').append(li);
+            while ($('log').children.length > 6) $('log').firstChild.remove();
+            return;
+          }
+          case 'result':
+            $('done-elapsed').textContent = startedAt ? `in ${since()}` : '';
+            renderResult(event.data);
+            // A real product would POST event.data to its backend here.
+            return show('done');
+          case 'error':
+          case 'stopped':
+            $('failed').dataset.kind = event.type;
+            $('failed-title').textContent = event.type === 'stopped' ? 'Stopped' : "Couldn't finish";
+            // "Stopped. You have control of the tab." reads on from the "Stopped" heading.
+            $('failed-message').textContent = event.type === 'stopped' ? event.message.replace(/^Stopped[.:]?\s*/, '') || 'You have control of the tab.' : event.message;
+            return show('failed');
+        }
+      }
+
+      // The DMS this customer uses. A real product passes its own value; the demo reads ?dms=.
+      let dms = (new URLSearchParams(location.search).get('dms') || 'tekion').toLowerCase();
+      let flows = [];
+      const dmsName = () => (flows.find((f) => f.dms === dms) || {}).dmsName || dms;
+      function pickDms(id) {
+        dms = id;
+        const flow = flows.find((f) => f.dms === id);
+        document.querySelectorAll('.dms-name').forEach((el) => (el.textContent = dmsName()));
+        document.title = `Connect ${dmsName()}`;
+        $('summary').textContent = flow ? flow.summary : `VIN Flow doesn't list ${id} as a supported DMS yet.`;
+      }
+
+      const ACRONYMS = { ro: 'RO', vin: 'VIN', id: 'ID', url: 'URL', dms: 'DMS' };
+      const label = (key) => key.split('_').map((w) => ACRONYMS[w] || w).join(' ').replace(/^./, (c) => c.toUpperCase());
+      const text = (v) => (Array.isArray(v) ? v.join(', ') || 'None' : v === null || v === '' ? 'None' : typeof v === 'boolean' ? (v ? 'Yes' : 'No') : String(v));
+      const isRecords = (v) => Array.isArray(v) && v.length > 0 && v.every((x) => x && typeof x === 'object' && !Array.isArray(x));
+
+      /** Plain fields as a list; lists of records (e.g. repair orders) as tables. */
+      function renderResult(data) {
+        const entries = Object.entries(data);
+        $('result').replaceChildren(
+          ...entries.filter(([, v]) => !isRecords(v)).flatMap(([key, value]) => {
+            const dt = document.createElement('dt');
+            dt.textContent = label(key);
+            const dd = document.createElement('dd');
+            dd.textContent = text(value);
+            return [dt, dd];
+          }),
+        );
+        $('records').replaceChildren(
+          ...entries.filter(([, v]) => isRecords(v)).map(([key, rows]) => {
+            const box = document.createElement('div');
+            box.className = 'records';
+            const h = document.createElement('h3');
+            h.append(label(key), Object.assign(document.createElement('span'), { className: 'count', textContent: rows.length }));
+            const cols = Object.keys(rows[0]);
+            const table = document.createElement('table');
+            const head = table.createTHead().insertRow();
+            for (const c of cols) head.append(Object.assign(document.createElement('th'), { textContent: label(c) }));
+            const body = table.createTBody();
+            for (const row of rows) {
+              const tr = body.insertRow();
+              for (const c of cols) tr.insertCell().textContent = text(row[c]);
+            }
+            const scroll = Object.assign(document.createElement('div'), { className: 'scroll' });
+            scroll.append(table);
+            box.append(h, scroll);
+            return box;
+          }),
+        );
+      }
+
+      async function start() {
+        $('start-error').hidden = true;
+        $('log').replaceChildren();
+        $('tab').hidden = true;
+        startedAt = 0;
+        // Straight from the click: the extension may open its side panel only during a user gesture.
+        const reply = await send({ type: 'start', dms });
+        if (!reply || !reply.ok) {
+          $('start-error').textContent = (reply && reply.error) || 'The extension did not answer. Is it installed and enabled?';
+          $('start-error').hidden = false;
+          return show('ready');
+        }
+        show('running');
+      }
+
+      $('start').onclick = start;
+      $('again').onclick = start;
+      $('retry').onclick = () => show('ready');
+      $('stop').onclick = () => send({ type: 'stop' });
+      $('continue').onclick = () => send({ type: 'continue' });
+      $('go').onclick = () => send({ type: 'focus' });
+      $('tab-go').onclick = () => send({ type: 'focus' });
+      detect();
+    </script>
+  </body>
+</html>

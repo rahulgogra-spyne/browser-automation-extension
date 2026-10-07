@@ -1,0 +1,8 @@
+{
+  "manifest_version": 3,
+  "name": "Fake password manager (test fixture)",
+  "description": "Puts its own iframe into fixture pages, the way 1Password's inline menu does. Chrome then won't let another extension debug the page.",
+  "version": "1.0",
+  "content_scripts": [{ "matches": ["http://127.0.0.1/*"], "js": ["inject.js"] }],
+  "web_accessible_resources": [{ "resources": ["popup.html"], "matches": ["http://127.0.0.1/*"] }]
+}

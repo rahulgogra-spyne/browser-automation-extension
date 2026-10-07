@@ -1,0 +1,43 @@
+{
+  "name": "vin-flow",
+  "description": "Runs one fixed VinSolutions flow on your behalf with OpenAI computer use.",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "author": "Piyush Gambhir",
+  "packageManager": "pnpm@11.25.0",
+  "scripts": {
+    "dev": "wxt",
+    "relay": "node server/relay.ts",
+    "fe": "node tools/serve-fe.mjs",
+    "build:install": "wxt build && rm -rf build/vin-flow-chrome && mkdir -p build && cp -R .output/chrome-mv3 build/vin-flow-chrome",
+    "build": "wxt build",
+    "zip": "wxt zip",
+    "icons": "node tools/icons.mjs",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "check": "vitest run && tsc --noEmit && wxt build",
+    "postinstall": "wxt prepare",
+    "test:e2e": "wxt build --mode e2e && playwright test e2e/flow.spec.ts e2e/fe.spec.ts",
+    "test:live": "wxt build && playwright test e2e/live.spec.ts"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.63.0",
+    "@tailwindcss/vite": "^4.3.2",
+    "@types/chrome": "^0.2.2",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@types/ws": "^8.18.2",
+    "@wxt-dev/module-react": "^1.2.2",
+    "sharp": "^0.35.3",
+    "tailwindcss": "^4.3.2",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.10",
+    "wxt": "^0.20.27"
+  },
+  "dependencies": {
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "ws": "^8.22.0"
+  }
+}
