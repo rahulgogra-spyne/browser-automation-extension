@@ -1,3 +1,8 @@
 node_modules/
 *.zip
 .DS_Store
+.env
+/v2/
+/.claude/
+extension/.playwright-mcp/
+2026-*-local-command-caveat*.txt

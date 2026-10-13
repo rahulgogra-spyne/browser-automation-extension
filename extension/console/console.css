@@ -1,25 +1,29 @@
+/* Shown as the toolbar popup (Chrome caps it at 800×600): a fixed width, and
+   the page scrolls inside the popup. */
 body {
-  width: auto;
-  font-size: 14px;
+  width: 460px;
+  font-size: 13px;
 }
 
 .console {
-  max-width: 1100px;
-  margin: 0 auto;
-  padding: 20px 20px 40px;
+  max-height: 580px;
+  overflow-y: auto;
+  margin: 0;
+  padding: 14px 14px 16px;
 }
 
 .console-head {
-  display: flex;
-  justify-content: space-between;
-  gap: 16px;
-  align-items: flex-start;
   margin-bottom: 16px;
 }
 
 .console-head h1 {
-  margin: 0 0 4px;
-  font-size: 22px;
+  margin: 0 0 6px;
+  font-size: 18px;
+}
+
+.console-head p {
+  margin: 0;
+  max-width: 60ch;
 }
 
 .muted {
@@ -68,18 +72,6 @@ body {
   color: var(--text);
 }
 
-.columns {
-  display: grid;
-  grid-template-columns: 1.3fr 1fr;
-  gap: 16px;
-}
-
-@media (max-width: 800px) {
-  .columns {
-    grid-template-columns: 1fr;
-  }
-}
-
 table {
   width: 100%;
   border-collapse: collapse;
@@ -110,11 +102,6 @@ td a {
   flex-wrap: wrap;
 }
 
-.row input[type='url'] {
-  flex: 1;
-  min-width: 260px;
-}
-
 select {
   padding: 6px 8px;
   font: inherit;
@@ -124,22 +111,29 @@ select {
   border-radius: 6px;
 }
 
-.log-title {
-  margin-top: 16px;
-}
-
-.console-log {
-  max-height: 320px;
-  margin: 0;
-}
-
-.map-stages[hidden] {
-  display: none;
-}
-
 .console {
   max-height: none;
   overflow: visible;
+}
+
+/* The start card: CRM picker + the one primary action. */
+.start-row {
+  gap: 10px;
+}
+
+.start-row select {
+  flex: 1;
+  min-width: 220px;
+  padding: 8px 10px;
+}
+
+.start-row #gather {
+  padding: 8px 18px;
+  font-size: 15px;
+}
+
+#start-hint {
+  margin: 10px 0 0;
 }
 
 .site-card {
@@ -155,14 +149,6 @@ select {
 
 .site-card p {
   margin: 0;
-}
-
-.console-log-tall {
-  max-height: 60vh;
-  font-size: 12px;
-  line-height: 1.45;
-  white-space: pre-wrap;
-  word-break: break-word;
 }
 
 td.partial {

@@ -6,26 +6,28 @@
 // the saved rules (no AI, no server), logs every value it read and saves the
 // rows to today's CSV files as it goes.
 import { STANDARD_KEYS } from './lib/columns.js';
+import { columnsFromHeaders, slugKey } from './lib/columns.js';
 import { getSettings } from './lib/settings.js';
 import { upsertRows, addMessages, listDays, getDay } from './lib/store.js';
 import { toCsv, csvFileName } from './lib/csv.js';
 import { normalizeValue } from './lib/normalize.js';
 import { MESSAGE_COLUMNS } from './lib/messages.js';
 import { buildCapture } from './lib/capture.js';
-import { findCrm, findPageType, assessExtraction, describeProblems, urlKey } from './lib/crm-config.js';
+import { findCrm, assessExtraction, describeProblems, urlKey } from './lib/crm-config.js';
 import { localDateKey, localTimestamp } from './lib/dates.js';
 import { detectSite } from './lib/site.js';
 import { writeCsvFile, writeTextFile } from './lib/sinks/local-downloads.js';
-import { nextPageUrl, isPagedUrl } from './lib/paging.js';
 import { followScriptLinks } from './lib/follow-links.js';
 import { execScript, onCancelCheck } from './lib/exec.js';
 import { adoptOpenedTab } from './lib/opened-tabs.js';
 import { DATASETS, OTHER_DATASET, datasetById, datasetOfPageType, datasetsOfCrm, rowTitle } from './lib/datasets.js';
 import { referenceRows, REFERENCE_COLUMNS } from './lib/reference.js';
+import { captureDatasetViaApi, apiDatasets, hasApi, pathsReady, buildParams, resolveStores } from './lib/api-capture.js';
+import { captureVehiclesViaSearch } from './lib/vehicle-api.js';
+import { captureInventoryGrid } from './lib/inventory-grid.js';
 
 const MAX_MESSAGE_PAGES = 15; // per record, when messages have pages of their own
 const MAX_PAGES_PER_LIST = 200;
-const MAX_RECORDS_PER_RUN = 5000;
 const MAX_LOG_LINES = 4000; // the log holds every value read; the CSV holds all of it anyway
 const LOG_VALUE_CHARS = 300; // long bodies are cut in the log, never in the CSV
 
@@ -43,17 +45,20 @@ function getCrmConfig() {
   return configPromise;
 }
 
+// A CRM page that is its sign-in (or signed-out) page, not the application.
+const SIGNED_OUT_URL = /\/(login|signin|sign-in|logout|logoff)\b|login\.asp/i;
+
 const listCrms = async () => {
   const config = await getCrmConfig();
   return Object.entries(config.crms ?? {})
-    .filter(([, c]) => (c.pageTypes ?? []).length)
-    .map(([id, c]) => ({ id, name: c.name, version: c.version, hosts: c.match?.hosts ?? [], datasets: datasetsOfCrm(c), lists: c.pageTypes.filter((pt) => pt.role === 'list' || pt.role === 'screen').length }));
+    .filter(([, c]) => (c.pageTypes ?? []).length || hasApi(c))
+    .map(([id, c]) => ({ id, name: c.name, version: c.version, hosts: c.match?.hosts ?? [], datasets: datasetsOfCrm(c), lists: (c.pageTypes ?? []).filter((pt) => pt.role === 'list' || pt.role === 'screen').length, api: hasApi(c) }));
 };
 
 // ------------------------------------------------------------- messaging
 
 const handlers = {
-  captureCrm,
+  captureCrmApi,
   cancelCapture: async () => {
     cancelRequested = true;
     return {};
@@ -70,59 +75,27 @@ const handlers = {
     return {};
   },
   listCrms: async () => ({ crms: await listCrms() }),
-  // The CRM page the user is working in (the most recently used web tab),
-  // and what the layouts know about it.
+  // The tab on screen (the active tab of the focused window) and whether it is
+  // a supported CRM, signed in, with the page its API calls run in. Only this
+  // tab is ever captured.
   activeSite: async () => {
-    const workTabs = new Set(work.tabs.map((t) => t.id));
-    const tabs = (await chrome.tabs.query({})).filter((t) => /^https?:/i.test(t.url || '') && !workTabs.has(t.id));
-    const tab = tabs.sort((a, b) => (b.lastAccessed ?? 0) - (a.lastAccessed ?? 0))[0];
-    if (!tab) return { site: null };
-    const crm = findCrm(await getCrmConfig(), tab.url);
-    const page = crm && findPageType(crm.crm, tab.url);
+    const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    if (!tab || !/^https?:/i.test(tab.url || '')) return { site: null };
+    const config = await getCrmConfig();
+    const crm = findCrm(config, tab.url);
+    const session = crm && hasApi(crm.crm) ? await findApiSession(config, crm.id, tab.id) : null;
     return {
       site: {
         tabId: tab.id,
-        url: tab.url,
         host: new URL(tab.url).host,
         name: crm ? crm.crm.name : detectSite(tab.url),
         crmId: crm?.id ?? null,
-        version: crm?.crm.version ?? 0,
-        role: page?.pageType.role ?? null,
-        lists: crm ? crm.crm.pageTypes.filter((pt) => pt.role === 'list' || pt.role === 'screen').length : 0,
         datasets: crm ? datasetsOfCrm(crm.crm) : [],
+        api: crm ? hasApi(crm.crm) : false,
+        signedOut: Boolean(session && SIGNED_OUT_URL.test(session.url)),
+        ready: Boolean(session && !SIGNED_OUT_URL.test(session.url)),
       },
     };
-  },
-  openConsole: async () => ({ windowId: await ensureConsoleWindow() }),
-  // The list on the CRM tab the user set up (menus clicked, Search pressed):
-  // its grid is learned and read page after page, in that tab.
-  captureHere,
-  // Everything the CRM tab shows (frames, grids, buttons, selects, store switchers), for the log.
-  describeTab: async ({ tabId }) => {
-    const tab = await chrome.tabs.get(tabId).catch(() => null);
-    if (!tab || !/^https?:/i.test(tab.url || '')) throw new Error('Open the CRM in a tab first.');
-    await inject(tabId, ['content/crm-runtime.js']);
-    const lines = [`${new Date().toLocaleTimeString()}  Describing ${tab.url}`, ...(await describeTab(tabId, { full: true })).map((l) => `            ${l}`)];
-    const { diagnostic = [] } = await chrome.storage.session.get('diagnostic');
-    await chrome.storage.session.set({ diagnostic: [...diagnostic, ...lines].slice(-400) });
-    return { lines };
-  },
-  // The structure of the CRM tab, written to a file for whoever maintains the layouts.
-  inspectTab,
-  // Whether the CRM tab shows a data grid now, for the capture window.
-  tabGrid: async ({ tabId }) => {
-    const tab = await chrome.tabs.get(tabId).catch(() => null);
-    if (!tab || !/^https?:/i.test(tab.url || '')) return { grid: null };
-    const found = (await inFrames(tabId, () => {
-      const rt = window.__crmRuntime;
-      const t = rt?.describeTable?.();
-      return t && rt.isDataGrid(t.spec) ? { headers: t.spec.headers, count: t.count } : null;
-    }))
-      .map((f) => f.result)
-      .filter(Boolean)
-      .sort((a, b) => b.count - a.count)[0];
-    const loader = (await inFrames(tabId, () => window.__crmRuntime?.describeLoader?.() ?? null)).map((f) => f.result).find(Boolean) ?? null;
-    return { grid: found ? { ...found, dataset: guessDataset(found.headers) } : null, loader: loader?.text ?? null };
   },
   writeDay,
   status,
@@ -139,8 +112,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   return true; // keep the channel open for the async response
 });
 
-// The toolbar icon opens the capture window.
-chrome.action.onClicked.addListener(() => ensureConsoleWindow({ show: true }).catch(() => {}));
 
 // Row updates and file rewrites run one at a time so two quick saves can't
 // interleave their read-modify-write.
@@ -196,13 +167,8 @@ function startRun({ crmId, name, phase }) {
   const data = (lines) => lines.forEach((line) => push(`            ${line}`));
   const publish = async () => {
     await chrome.storage.session.set({ bulk: stats });
-    // The capture page is behind the work tab during a run: the badge counts the records.
-    if (stats.status === 'running') {
-      await chrome.action.setBadgeBackgroundColor({ color: '#1a7f37' });
-      await chrome.action.setBadgeText({ text: String(stats.captured) });
-    }
   };
-  return { stats, note, data, fullLog, seen: new Set(), grids: new Set(), pending: [], publish };
+  return { stats, note, data, fullLog, seen: new Set(), grids: new Set(), pending: [], publish, pendingKeys: new Set() };
 }
 
 const cut = (value) => {
@@ -226,26 +192,43 @@ function describeRecord(fields, collections = {}) {
   return lines;
 }
 
-async function flushRun(run, ctx) {
-  if (!run.pending.length) return;
-  const batch = run.pending;
-  run.pending = [];
-  const result = await save({ records: batch, meta: { site: ctx.crm.name, pageTitle: '' } });
-  run.stats.saved += batch.length;
-  run.stats.messages = result.messages;
-  run.stats.files = [...new Set([...run.stats.files, ...(result.files ?? [])])];
-  run.note(`Saved ${batch.length} record(s) → ${(result.files ?? []).join(', ')}${result.fileError ? ` (${result.fileError})` : ''}`);
-  if (result.fileError) run.stats.fileError = result.fileError;
+async function flushRun(run, ctx, { force = false } = {}) {
+  // Persist the records to storage first (the source of truth): this is the
+  // fail-safe — whatever has been captured so far is saved immediately and
+  // survives any later error, cancellation or crash. This step writes NO files.
+  if (run.pending.length) {
+    const batch = run.pending;
+    run.pending = [];
+    const result = await save({ records: batch, meta: { site: ctx.crm.name, pageTitle: '' }, writeFiles: false });
+    run.stats.saved += batch.length;
+    for (const key of result.pendingKeys ?? []) run.pendingKeys.add(key);
+    run.note(`Saved ${batch.length} record(s) in the extension (${run.stats.saved} so far).`);
+  }
+
+  // The CSV files are downloaded once, when the run finishes (or is
+  // cancelled). Nothing is lost by waiting: the data is already in storage
+  // and the files are regenerated from it.
+  if (!force || !run.pendingKeys.size) return;
+  const only = [...run.pendingKeys];
+  run.pendingKeys.clear();
+  const settings = ctx.settings ?? (await getSettings());
+  const files = await serialized(() => writeDayFiles(localDateKey(), settings, { only }));
+  run.stats.messages = files.messages;
+  run.stats.files = [...new Set([...run.stats.files, ...(files.files ?? [])])];
+  run.note(`Wrote CSV file(s) → ${(files.files ?? []).join(', ')}${files.fileError ? ` (${files.fileError})` : ''}`);
+  if (files.fileError) run.stats.fileError = files.fileError;
+  else delete run.stats.fileError;
 }
 
 async function finishRun(run, ctx, error = null) {
   const { stats } = run;
   try {
-    await flushRun(run, ctx);
+    await flushRun(run, ctx, { force: true });
   } catch (flushError) {
     error = error ?? flushError;
   }
   stats.status = error ? 'failed' : cancelRequested ? 'cancelled' : 'done';
+  if (!error && !cancelRequested) stats.percent = 100;
   if (error) stats.error = error.message;
   stats.phase = '';
   stats.finishedAt = Date.now();
@@ -264,35 +247,233 @@ async function finishRun(run, ctx, error = null) {
   return stats;
 }
 
-// Every record behind every mapped list of a CRM, page after page, each read
-// with the saved layout and saved to the day's files as it goes. Runs in the
-// background; the capture window follows it through bulkStatus and can
-// cancel it. startUrl: the page the user is on (a list to start from).
-async function captureCrm({ crmId, startUrl = null }) {
+// Gather information: the CRM captured through its own JSON API instead of
+// its pages: no tabs are opened and nothing is clicked. The requests run in
+// the CRM tab the user is on (its signed-in session is reused), the endpoints
+// and field paths come from the CRM's `api` block in the layouts, every value
+// is logged, and rows are saved to today's CSVs as it goes — identical output.
+// A record the API can't give is read from its page instead (one background
+// tab, only for that record), so a partial API never loses data.
+async function captureCrmApi({ crmId, tabId = null }) {
   if (bulkInProgress) throw new Error(`Already capturing ${bulkInProgress}. Wait for it or cancel it.`);
   const settings = await getSettings();
   const config = await getCrmConfig();
   const crm = config.crms?.[crmId];
   if (!crm) throw new Error('No layout is bundled for this CRM.');
-  const recordTypes = crm.pageTypes.filter((pt) => pt.role === 'record');
-  const screens = crm.pageTypes.filter((pt) => pt.role === 'screen' && pt.validation?.ok !== false);
-  if (!recordTypes.length && !screens.length) throw new Error('No layout is mapped for this CRM.');
-  let lists = crm.pageTypes.filter((pt) => pt.role === 'list');
-  // No list mapped: walk from the page the user is on, page after page,
-  // taking every link into a mapped record (its items are found by shape).
-  if (!lists.length && !screens.length && startUrl && recordTypes.length) lists = [{ id: 'current_page', entity: recordTypes[0].entity, recordPageType: recordTypes[0].id, items: null, samples: [startUrl] }];
-  if (!lists.length && !screens.length) throw new Error('No list is mapped for this CRM. Open one of its lists (users, contacts, leads…) and capture from there.');
+  const allDatasets = apiDatasets(crm.api);
+  if (!allDatasets.length) throw new Error('No API is configured for this CRM.');
+
+  // Capture only the datasets whose endpoints/field paths are filled in; a
+  // dataset still carrying TODO paths is skipped (and noted), so one unmapped
+  // dataset (e.g. vehicles) never blocks the ready ones (e.g. customers).
+  const datasets = allDatasets.filter((d) => pathsReady(d));
+  const skipped = allDatasets.filter((d) => !pathsReady(d)).map((d) => d.dataset);
+  if (!datasets.length) {
+    throw new Error(`The ${crm.name} API isn't mapped yet (${skipped.join(', ') || 'no datasets ready'}). Fill in its endpoint and field paths in config/crm-structures.json.`);
+  }
+
+  // Only the CRM on screen is captured, never another tab.
+  const session = tabId != null ? await findApiSession(config, crmId, tabId) : null;
+  if (!session || SIGNED_OUT_URL.test(session.url)) throw new Error(`Go to ${crm.name} in this tab and sign in, then press Gather information again.`);
+  const origin = new URL(session.url).origin;
+
   bulkInProgress = crm.name;
   cancelRequested = false;
-  await ensureConsoleWindow({ show: false });
-  const run = startRun({ crmId, name: crm.name, phase: 'Collecting records…' });
-  run.note(`Capturing ${crm.name} with layout v${crm.version}: ${lists.length} list(s), ${screens.length} screen(s)`);
+  const run = startRun({ crmId, name: `${crm.name} (API)`, phase: 'Capturing through the API…' });
+  run.note(`Capturing ${crm.name} through its API (no tabs): ${datasets.length} dataset(s), using the session on ${origin}`);
+  if (skipped.length) run.note(`Skipping ${skipped.length} unmapped dataset(s): ${skipped.join(', ')} (endpoints not filled in yet).`);
   await run.publish();
   const keepAlive = setInterval(() => chrome.runtime.getPlatformInfo(), 20_000);
   const ctx = { crmId, crm, settings };
+  const cookieParams = await resolveApiParams(crm, { url: session.url }).catch(() => null);
+  // This user's own stores and ids, read from their session at the start of
+  // every run (never fixed in the config), so any dealership's account works.
+  const urlVars = Object.fromEntries(Object.entries(crm.api.urlVars ?? {}).map(([key, pattern]) => [key, session.url.match(new RegExp(pattern))?.[1]]).filter(([, v]) => v));
+  const apiParams = cookieParams && { ...cookieParams, ...urlVars };
+  const found = await resolveStores({ tabId: session.tabId, frameId: session.frameId, origin, api: crm.api }).catch((e) => ({ error: e.message }));
+  const runApi = { ...crm.api, stores: Array.isArray(found) ? found : [] };
+  run.note(Array.isArray(found)
+    ? `Stores in this session: ${found.map((s) => `${s.name} (${s.companyId})`).join(', ')}`
+    : `The dealer list could not be read (${found.error}); only the store the CRM is on will be captured.`);
+  // Datasets the API could not fully give, read from their screens' grids
+  // instead: kind -> the stores to read (null: every store).
+  const gridFallback = new Map();
+
   try {
-    if (lists.length) await captureLists(run, ctx, lists, { startUrl });
-    if (screens.length) await captureScreens(run, ctx, screens);
+    for (const dataset of datasets) {
+      if (cancelRequested) break;
+      const kind = datasetById(dataset.dataset)?.id ?? dataset.dataset;
+      run.stats.phase = `API: ${dataset.entity || kind}`;
+      run.note(`Dataset "${kind}" via ${dataset.list.method || 'GET'} ${dataset.list.path}`);
+      await run.publish();
+
+      const recordType = (crm.pageTypes ?? []).find((pt) => pt.role === 'record' && datasetOfPageType(pt, crm) === kind);
+
+      const got = await captureDatasetViaApi({
+        tabId: session.tabId,
+        frameId: session.frameId,
+        origin,
+        api: runApi,
+        params: apiParams,
+        dataset,
+        hooks: {
+          isCancelled: () => cancelRequested,
+          onProgress: (found, expected) => {
+            run.stats.found = found;
+            run.stats.expected = expected;
+            run.stats.percent = expected ? Math.min(99, Math.round((found / expected) * 100)) : 0;
+          },
+          onNote: (line) => run.note(line),
+          onData: ({ fields, collections }) => run.data(describeRecord(fields, collections)),
+          onRecord: async ({ record, url }) => {
+            const name = rowTitle(record.fields) || url;
+            const messages = Object.values(record.collections ?? {}).reduce((n, l) => n + l.length, 0);
+            run.stats.byKind[kind] = (run.stats.byKind[kind] ?? 0) + 1;
+            if (record.store) run.stats.byStore[record.store] = (run.stats.byStore[record.store] ?? 0) + 1;
+            run.stats.recent.unshift({ name, kind, store: record.store ?? '', fields: Object.keys(record.fields).length, messages, url, partial: false });
+            if (run.stats.recent.length > 60) run.stats.recent.pop();
+            run.note(`Captured ${name} (${kind}): ${Object.keys(record.fields).length} fields, ${messages} messages — ${url}`);
+            run.pending.push({ ...record, store: record.store ?? null });
+            if (run.pending.length >= 25) await flushRun(run, ctx);
+            await run.publish();
+          },
+          // Page mode: capture the FULL record from its OpptyDetails page using
+          // the DOM layout (customer + opportunity + vehicle/trade + scheduled &
+          // completed activities + AI summary). The list supplies lPID (PersonId)
+          // and lDID (DealId) to build the URL; one background tab per record.
+          onPageCapture: async ({ id, item, seedFields, store }) => {
+            if (!recordType) return null;
+            // record.pageUrl is a template ({id} + the list row's own fields, e.g. {autoLeadId});
+            // a leading "/" is same-origin. Falls back to CDK eLead's OpptyDetails page.
+            const tpl = dataset.record?.pageUrl;
+            const pageUrl = tpl
+              ? (tpl.startsWith('http') ? tpl : origin + tpl).replace(/\{(\w+)\}/g, (_, k) => encodeURIComponent(k === 'id' ? id : item?.[k] ?? ''))
+              : `${origin}/evo2/fresh/elead-v45/elead_track/newprospects/OpptyDetails.aspx?${item?.DealId ? `lDID=${encodeURIComponent(item.DealId)}&` : ''}lPID=${encodeURIComponent(id)}&Loc=PT`;
+            run.note(`Record ${id}: reading full page ${pageUrl}`);
+            const result = await withBackgroundTab(pageUrl, (t) => captureRecord(t.id, crm, recordType));
+            if (!result || !Object.keys(result.fields).length) return null;
+            const rec = toRecord(result);
+            const fields = { ...seedFields, ...Object.fromEntries(rec.fields.map((f) => [f.key, f.value])) };
+            return { fields, collections: rec.collections, pageUrl };
+          },
+          // The API couldn't give this record: read its page instead, in one
+          // background tab, exactly like Capture whole CRM does for every row.
+          onFallback: async ({ id, url, missing, error, seedFields }) => {
+            if (!recordType) {
+              run.note(`No page layout to fall back to for ${id} (${error || `missing ${(missing || []).join(', ')}`})`);
+              return null;
+            }
+            const pageUrl = findRecordPageUrl(crm, recordType, origin, id);
+            if (!pageUrl) {
+              run.note(`Record ${id}: API incomplete and no page URL to read it from`);
+              return null;
+            }
+            run.note(`Record ${id}: ${error ? `API error (${error})` : `API missing ${(missing || []).join(', ')}`} — reading its page ${pageUrl}`);
+            try {
+              const result = await withBackgroundTab(pageUrl, (t) => captureRecord(t.id, crm, recordType));
+              if (!result || !Object.keys(result.fields).length) return null;
+              const rec = toRecord(result);
+              const fields = { ...seedFields, ...Object.fromEntries(rec.fields.map((f) => [f.key, f.value])) };
+              return { fields, collections: rec.collections, pageUrl, recordId: id, dataset: dataset.dataset, store: null };
+            } catch (e) {
+              run.note(`Record ${id}: page fallback failed (${e.message})`);
+              return null;
+            }
+          },
+        },
+      }).catch((error) => ({ error }));
+      if (got.error) {
+        run.note(`Dataset "${kind}": the API failed (${got.error.message}); its screens will be read instead.`);
+        gridFallback.set(kind, null);
+      } else if (got.failedStores?.length) {
+        run.note(`Dataset "${kind}": the API could not read ${got.failedStores.map((s) => s.name || s.companyId).join(', ')}; their screens will be read instead.`);
+        gridFallback.set(kind, got.failedStores);
+      }
+    }
+    await flushRun(run, ctx);
+
+    // A vehicle record from either inventory capture, counted and queued like the API's rows.
+    const vehicleSink = (kind) => async ({ record }) => {
+      run.stats.byKind[kind] = (run.stats.byKind[kind] ?? 0) + 1;
+      if (record.store) run.stats.byStore[record.store] = (run.stats.byStore[record.store] ?? 0) + 1;
+      run.stats.found += 1;
+      run.stats.recent.unshift({ name: rowTitle(record.fields) || record.recordId, kind, store: record.store ?? '', fields: Object.keys(record.fields).length, messages: 0, url: record.pageUrl, partial: false });
+      if (run.stats.recent.length > 60) run.stats.recent.pop();
+      run.pending.push(record);
+      if (run.pending.length >= 50) await flushRun(run, ctx);
+    };
+    // Runs one inventory capture and files what it could not read for the grid fallback.
+    const captureVehicles = async (spec, label, capture) => {
+      const kind = datasetById(spec.dataset || 'vehicles')?.id ?? 'vehicles';
+      run.stats.phase = `API: ${label}`;
+      run.note(`Dataset "${kind}" via ${label}`);
+      await run.publish();
+      const got = await capture({
+        tabId: session.tabId,
+        frameId: session.frameId,
+        origin,
+        api: runApi,
+        hooks: {
+          isCancelled: () => cancelRequested,
+          onProgress: (found, expected) => {
+            run.stats.found = found;
+            run.stats.expected = expected;
+            run.stats.percent = expected ? Math.min(99, Math.round((found / expected) * 100)) : 0;
+          },
+          onNote: (line) => run.note(line),
+          onData: (fields) => run.data(describeRecord(fields, {})),
+          onRecord: vehicleSink(kind),
+        },
+      }).catch((error) => ({ error, captured: 0, failed: 0 }));
+      run.stats.captured += got.captured;
+      run.stats.failed += got.failed;
+      if (got.error) {
+        run.note(`Dataset "${kind}": ${label} failed (${got.error.message}); its screen will be read instead.`);
+        gridFallback.set(kind, null);
+      } else if (got.failedStores?.length) {
+        run.note(`Dataset "${kind}": ${got.failedStores.map((s) => s.name || s.companyId).join(', ')} could not be read; their grid will be read instead.`);
+        gridFallback.set(kind, got.failedStores);
+      }
+      await flushRun(run, ctx);
+      await run.publish();
+    };
+
+    // Vehicle inventory, fetched instead of clicked through: CDK Unify's
+    // Vehicle Search store by store, or an inventory grid page (VinSolutions).
+    // Stores it can't read go to the grid fallback below.
+    if (crm.api?.vehicles && !cancelRequested) await captureVehicles(crm.api.vehicles, 'Vehicle Search (Search fetched per store, no clicks)', captureVehiclesViaSearch);
+    if (crm.api?.inventory && !cancelRequested) await captureVehicles(crm.api.inventory, `${crm.api.inventory.entity || 'the inventory page'} (fetched, no clicks)`, captureInventoryGrid);
+
+    // The grid fallback: a dataset's screens, read only for the stores the API
+    // missed (crm.stores.only, matched on the "(companyId)" the dealer drop-down
+    // shows), or for every store when the API failed outright.
+    for (const [kind, stores] of gridFallback) {
+      if (cancelRequested) break;
+      const screens = (crm.pageTypes ?? []).filter((pt) => pt.role === 'screen' && pt.validation?.ok !== false && datasetOfPageType(pt, crm) === kind);
+      if (!screens.length) {
+        run.note(`Dataset "${kind}": no screen is mapped to read it from instead.`);
+        continue;
+      }
+      const only = stores?.map((s) => (s.companyId != null ? `(${s.companyId})` : s.name)).filter(Boolean);
+      const switcher = crm.stores && typeof crm.stores === 'object' ? crm.stores : null;
+      const fallbackCtx = only?.length && switcher ? { ...ctx, crm: { ...crm, stores: { ...switcher, only } } } : ctx;
+      run.note(`Fallback: reading ${screens.map((s) => s.entity).join(', ')} from the grid${only?.length ? ` for ${stores.map((s) => s.name || s.companyId).join(', ')}` : ' for every store'}`);
+      await run.publish();
+      await captureScreens(run, fallbackCtx, screens);
+      await flushRun(run, ctx);
+    }
+    // Datasets the API doesn't cover at all are read from their mapped
+    // screens' grids, so an API run still collects them.
+    const apiKinds = new Set(datasets.map((d) => datasetById(d.dataset)?.id ?? d.dataset));
+    for (const spec of [crm.api?.vehicles, crm.api?.inventory]) if (spec) apiKinds.add(datasetById(spec.dataset || 'vehicles')?.id ?? 'vehicles');
+    const leftover = (crm.pageTypes ?? []).filter((pt) => pt.role === 'screen' && pt.validation?.ok !== false && !apiKinds.has(datasetOfPageType(pt, crm)));
+    const gridScreens = leftover;
+    if (gridScreens.length && !cancelRequested) {
+      run.note(`Capturing ${gridScreens.length} screen(s) the API doesn't cover, by reading their grids: ${gridScreens.map((s) => s.entity).join(', ')}`);
+      await run.publish();
+      await captureScreens(run, ctx, gridScreens);
+      await flushRun(run, ctx);
+    }
     return await finishRun(run, ctx);
   } catch (error) {
     await finishRun(run, ctx, error);
@@ -304,102 +485,80 @@ async function captureCrm({ crmId, startUrl = null }) {
   }
 }
 
-// Walks each list page after page and captures every record it links to.
-async function captureLists(run, ctx, lists, { startUrl = null } = {}) {
-  const { stats, note, seen } = run;
-  stats.lists += lists.length;
-  for (const list of lists) {
-    if (cancelRequested) break;
-    const recordType = ctx.crm.pageTypes.find((pt) => pt.id === list.recordPageType);
-    if (!recordType) continue;
-    const kind = datasetOfPageType(recordType, ctx.crm);
-    const queue = [];
-    let url = startUrl && (list.items ? matchesType(list, startUrl) : true) ? startUrl : list.samples?.[0];
-    const listSeen = new Set();
-    // Queues the records a page's entries link to; how many were new.
-    const take = (entries) => {
-      let fresh = 0;
-      for (const entry of entries) {
-        const match = entry.link && matchesType(recordType, entry.link);
-        if (!match) continue;
-        const id = `${recordType.id}:${match[1] || entry.link}`;
-        if (seen.has(id)) continue;
-        seen.add(id);
-        fresh++;
-        queue.push({ url: entry.link, title: entry.title || '', recordTypeId: recordType.id, recordId: match[1] ?? '' });
-      }
-      stats.found += fresh;
-      return fresh;
-    };
-    for (let pageNo = 0; url && pageNo < MAX_PAGES_PER_LIST && !cancelRequested; pageNo++) {
-      if (listSeen.has(url)) break;
-      listSeen.add(url);
-      stats.pages++;
-      stats.phase = `Reading the ${list.entity || 'record'} list (${kind}), page ${pageNo + 1}: ${queue.length} found`;
-      note(`${stats.phase} — ${url}`);
-      await run.publish();
-      const page = await withBackgroundTab(url, async (tab) => {
-        const paged = isPagedUrl(url);
-        let read = await readListPage(tab.id, list.items, { expand: !paged });
-        let fresh = take(read.entries);
-        // Paged by its address or by a "next" link: the next page is opened by
-        // the loop around. Otherwise a "next" button (a script-driven pager, an
-        // ASP.NET postback) is pressed right here, page after page.
-        if (paged || read.next || !read.pager) return { ...read, fresh };
-        let pages = 1;
-        let total = fresh;
-        while (fresh && pageNo + pages < MAX_PAGES_PER_LIST && stats.found < MAX_RECORDS_PER_RUN && !cancelRequested) {
-          const before = entrySignature(read.entries);
-          if (!(await pressListNext(tab.id, list.items.container))) break;
-          read = await readListPage(tab.id, list.items, { expand: false });
-          if (entrySignature(read.entries) === before) break; // "next" changed nothing: the last page
-          pages++;
-          stats.pages++;
-          fresh = take(read.entries);
-          total += fresh;
-          stats.phase = `Reading the ${list.entity || 'record'} list (${kind}), page ${pageNo + pages} (by its "next" button): ${queue.length} found`;
-          note(stats.phase);
-          await run.publish();
-        }
-        return { ...read, fresh: total, byButton: true };
-      });
-      if (page.expanded) note(`Expanded the list in place (${page.expanded} rounds of "show more"/scrolling)`);
-      if (page.byButton) break; // every page was read in the tab
-      if (!page.fresh || stats.found >= MAX_RECORDS_PER_RUN) break; // last page reached (or repeated)
-      // Next page: computed from the URL when it is paged, else the pager's link.
-      url = isPagedUrl(url) ? nextPageUrl(url, { pageSizeHint: page.entries.length }) : page.next;
+// The page address a record's page lives at, from its page type's urlRegex
+// (a template is recovered from the regex: the captured id goes where the
+// group is). Used only for the API's per-record fallback.
+function findRecordPageUrl(crm, recordType, origin, id) {
+  for (const sample of recordType.samples ?? []) {
+    try {
+      const u = new URL(sample, origin);
+      const re = new RegExp(recordType.urlRegex);
+      const key = u.pathname + u.search + u.hash;
+      if (re.test(key)) return sample.replace(/([=/])\d+(?=$|[/?&#])/, `$1${id}`);
+    } catch {
+      /* try the next sample */
     }
-    note(`${queue.length} ${kind} to capture from the ${list.entity || 'record'} list`);
-    await captureItems(run, ctx, queue);
   }
+  return null;
 }
 
-// One page of a list in a tab: { entries, next (a "next" link's address),
-// pager (a "next" control near the list), expanded }. expand: a list with no
-// pager at all may grow in place ("Show more", infinite scroll); it is
-// expanded fully first. spec null: an unmapped page offers every link on it.
-async function readListPage(tabId, spec, { expand }) {
-  await inject(tabId, ['content/crm-runtime.js']); // again: a postback reloads the page
-  const results = await execScript({
-      target: { tabId, allFrames: true },
-      func: async (spec, expand) => {
-        const rt = window.__crmRuntime;
-        if (!rt) return null;
-        const near = spec?.container ?? '';
-        const pager = Boolean(near) && rt.hasNext({ near });
-        let expanded = 0;
-        if (expand && !rt.nextPageLink() && !pager) expanded = await rt.expandAll({ rows: spec ? `${spec.container} ${spec.item.replace(/^:scope\s*>?\s*/, '')}` : null });
-        rt.snapshot();
-        const entries = spec ? rt.readCollection(spec) : rt.pageLinks().map((l) => ({ link: l.url, title: l.text }));
-        return { entries, next: rt.nextPageLink(), pager, expanded };
-      },
-      args: [spec, expand],
-    }, { long: true })
-    .catch(() => []);
-  return results.map((r) => r.result).find((r) => r?.entries?.length) ?? results.map((r) => r.result).find(Boolean) ?? { entries: [], next: null, pager: false };
+// Where the API calls run: a page on the api host (e.g. crm.connectcdk.com)
+// that the user already has open, so its signed-in session is used as it is
+// and no tab is opened. A tab on the api host itself comes first; else the CRM
+// frame inside another of the CRM's pages (CDK Unify shows the CRM in an
+// iframe from crm.connectcdk.com). The tab the capture window was looking at
+// is tried first. Returns { tabId, frameId, url } or null.
+async function findApiSession(config, crmId, tabId) {
+  const crm = config.crms?.[crmId];
+  const hostOf = (url) => {
+    try {
+      return new URL(url).host;
+    } catch {
+      return '';
+    }
+  };
+  const apiHost = crm?.api?.baseUrl ? hostOf(crm.api.baseUrl) : '';
+  const workTabs = new Set(work.tabs.map((t) => t.id));
+  const tabs = (await chrome.tabs.query({}))
+    .filter((t) => t.id === tabId && /^https?:/i.test(t.url || '') && !workTabs.has(t.id) && findCrm(config, t.url)?.id === crmId);
+  if (!apiHost) return tabs[0] ? { tabId: tabs[0].id, frameId: 0, url: tabs[0].url } : null;
+  // The requests must be first-party to the api host (its cookies are not sent
+  // cross-origin), so only a page on that host will do.
+  const direct = tabs.find((t) => hostOf(t.url) === apiHost);
+  if (direct) return { tabId: direct.id, frameId: 0, url: direct.url };
+  for (const t of tabs) {
+    const frames = ((await chrome.webNavigation.getAllFrames({ tabId: t.id }).catch(() => null)) ?? []).filter((f) => hostOf(f.url) === apiHost);
+    // The application's own pages before its sign-in hops.
+    const frame = frames.find((f) => /\/elead_track\//i.test(f.url)) ?? frames[0];
+    if (frame) return { tabId: t.id, frameId: frame.frameId, url: frame.url };
+  }
+  return null;
 }
 
-const entrySignature = (entries) => entries.slice(0, 3).map((e) => e.link || e.title || '').join('\n');
+// The POST-body params for a CRM's API, read from the session cookies via
+// chrome.cookies (which, unlike document.cookie, sees HttpOnly cookies too).
+// Reads cookies for the api host's registrable domain and the tab's URL, builds
+// the param set with buildParams, and never logs or stores auth cookie values.
+async function resolveApiParams(crm, tab) {
+  if (!chrome.cookies?.getAll) return null;
+  const jar = {};
+  const add = (list) => {
+    for (const c of list || []) if (!(c.name in jar)) jar[c.name] = c.value;
+  };
+  const urls = [];
+  try {
+    if (crm.api?.baseUrl) urls.push(crm.api.baseUrl);
+  } catch {
+    /* ignore */
+  }
+  if (tab?.url) urls.push(tab.url);
+  // By URL (covers path/secure scoping) and by domain (covers host-only + domain cookies).
+  for (const url of urls) add(await chrome.cookies.getAll({ url }).catch(() => []));
+  for (const domain of ['connectcdk.com', 'crm.connectcdk.com', 'app.connectcdk.com']) {
+    add(await chrome.cookies.getAll({ domain }).catch(() => []));
+  }
+  return buildParams(jar, crm.api?.windowDays);
+}
 
 // Presses the "next" control near a list (near: the list's selector) and
 // waits for what it started: a fetch, or a whole new page when the pager
@@ -536,38 +695,8 @@ async function replayPathInTab(tabId, path) {
 // column headers is learned on the spot, its columns named from the headers.
 // What was learned is kept (chrome.storage.local) for the next run.
 
-// Column headers -> row keys. Common captions map to the standard keys;
-// anything else becomes a slug of the caption.
-const HEADER_KEYS = [
-  [/^(full )?name$|^customer( name)?$|^contact( name)?$|^prospect( name)?$|^client$/i, 'full_name'],
-  [/^first( name)?$/i, 'first_name'], [/^last( name)?$|^surname$/i, 'last_name'],
-  [/^e-?mail( address)?$/i, 'email'],
-  [/^(cell|mobile|cell phone|mobile phone)$/i, 'phone_mobile'], [/^(home|home phone)$/i, 'phone_home'], [/^(work|work phone|business phone|office)$/i, 'phone_work'], [/^(phone|phone number|telephone|tel)$/i, 'phone'],
-  [/^(company|dealer|dealership|organization|organisation|account)$/i, 'company'], [/^(title|job title|position|role)$/i, 'job_title'],
-  [/^(address|street|address 1)$/i, 'address'], [/^city$/i, 'city'], [/^(state|province|st)$/i, 'state'], [/^(zip|zip code|postal code|postcode)$/i, 'zip'],
-  [/^(salesperson|sales person|sales rep|rep|owner|assigned to|assigned|agent|bdc)$/i, 'salesperson'],
-  [/^(source|lead source)$/i, 'lead_source'], [/^(status|lead status|stage)$/i, 'lead_status'],
-  [/^(year|yr|model year)$/i, 'vehicle_year'], [/^make$/i, 'vehicle_make'], [/^model$/i, 'vehicle_model'], [/^vin$/i, 'vin'], [/^(stock|stock ?#|stock no\.?|stock number)$/i, 'stock_number'],
-  [/^(price|retail|retail price|list price|asking)$/i, 'price'], [/^(mileage|miles|odometer)$/i, 'mileage'],
-  [/^(date|created|created on|date created|added)$/i, 'date'], [/^(notes?|comments?)$/i, 'notes'],
-  [/^(login|user ?name|user id|userid)$/i, 'login'], [/^(last login|last signed in)$/i, 'last_login'], [/^(department|dept)$/i, 'department'],
-];
-const slugKey = (header) => header.toLowerCase().replace(/#/g, ' number ').replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 40);
-function columnsFromHeaders(headers) {
-  const used = new Set();
-  const columns = [];
-  headers.forEach((header, index) => {
-    const caption = String(header ?? '').trim();
-    // Not data: a picture, a row's checkbox ("Select All Press ctrl + space to group"), its buttons.
-    if (!caption || /^(image|photo|pic|select|select all\b.*|actions?|)$/i.test(caption)) return;
-    let key = HEADER_KEYS.find(([re]) => re.test(caption))?.[1] ?? slugKey(caption);
-    if (!key) return;
-    if (used.has(key)) key = `${key}_${index + 1}`;
-    used.add(key);
-    columns.push({ index, key });
-  });
-  return columns;
-}
+// Column headers -> row keys and the field-key mapping live in lib/columns.js
+// (shared with the export capture): columnsFromHeaders, HEADER_KEYS, slugKey.
 
 // Which kind of data a grid holds, from its headers.
 function guessDataset(headers) {
@@ -774,7 +903,6 @@ async function inspectTab({ tabId, name = '', quiet = false }) {
   ];
   const { diagnostic = [] } = await chrome.storage.session.get('diagnostic');
   await chrome.storage.session.set({ diagnostic: [...diagnostic, ...lines].slice(-400) });
-  if (work.consoleTabId != null) await chrome.tabs.update(work.consoleTabId, { active: true }).catch(() => {});
   return { filename, frames: frames.length, dropdowns: dropdowns.length };
 }
 
@@ -1126,7 +1254,7 @@ async function captureScreens(run, ctx, screens) {
       if (!shows && !cancelRequested) {
         startUrl = fallbackOf.get(directOrStart);
         note(`The CRM's own page did not show the application (not signed in there, a dialog on it, or it only runs inside its launcher): going through the launcher (${startUrl.split('?')[0]}), which may start on the account's default store`);
-        await endJob({ keepConsoleBehind: true }); // a tab stuck on a dialog is closed, not reused
+        await endJob(); // a tab stuck on a dialog is closed, not reused
       }
     }
     stats.phase = `Opening ${startUrl.split('?')[0]}…`;
@@ -1387,61 +1515,6 @@ async function walkScreen(run, ctx, screen, tabId, queue, { kind = null, store =
   }
 }
 
-// Captures the list shown on the CRM tab the user prepared: they clicked
-// through the menus and pressed Search with the filters they want; the grid
-// on screen is learned (no AI) and read page after page in that very tab.
-// Rows that link into a mapped record page are captured from their pages.
-async function captureHere({ tabId, dataset = null }) {
-  if (bulkInProgress) throw new Error(`Already capturing ${bulkInProgress}. Wait for it or cancel it.`);
-  const tab = await chrome.tabs.get(tabId).catch(() => null);
-  if (!tab || !/^https?:/i.test(tab.url || '')) throw new Error('Open the CRM list in a tab first.');
-  const settings = await getSettings();
-  const config = await getCrmConfig();
-  const known = findCrm(config, tab.url);
-  const host = new URL(tab.url).host;
-  const crm = known?.crm ?? { name: detectSite(tab.url), match: { hosts: [host] }, pageTypes: [], startUrl: tab.url };
-  const crmId = known?.id ?? host.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase();
-  const kind = datasetById(dataset)?.id ?? null;
-  // Rows linking to a mapped record page of this kind are read from their pages.
-  const recordType = crm.pageTypes.find((pt) => pt.role === 'record' && (!kind || datasetOfPageType(pt, crm) === kind)) ?? null;
-  const screen = { id: `tab:${new URL(tab.url).pathname}`, entity: tab.title || 'this tab', dataset: kind, path: [], url: tab.url, table: null, adHoc: true, recordPageType: recordType?.id };
-  bulkInProgress = `${crm.name} (this tab)`;
-  cancelRequested = false;
-  await ensureConsoleWindow({ show: false });
-  // The tab being read is the one shown while it is read.
-  await chrome.windows.update(tab.windowId, { focused: true }).catch(() => {});
-  await chrome.tabs.update(tab.id, { active: true }).catch(() => {});
-  const run = startRun({ crmId, name: `${crm.name} — the list on the open tab`, phase: 'Reading the grid on the tab…' });
-  run.note(`Capturing the list on ${tab.url}`);
-  const seen = await tabVisibility(tab.id);
-  if (seen && seen.state !== 'visible') run.note(`The tab is not visible to the browser (${seen.state}): leave it in front while the capture runs, or the CRM may not draw its grid`);
-  await run.publish();
-  const keepAlive = setInterval(() => chrome.runtime.getPlatformInfo(), 20_000);
-  const ctx = { crmId, crm, settings };
-  try {
-    const queue = [];
-    await inject(tab.id, ['content/crm-runtime.js']);
-    // The store the tab is on, when its switcher says so (the user chose it: it is not changed here).
-    const shown = (await inFrames(tab.id, () => (window.__crmRuntime?.storeDropdowns?.() ?? []).filter((d) => d.hint).map((d) => d.caption)[0] ?? window.__crmRuntime?.currentStore?.(window.__crmRuntime?.describeStores?.() ?? {}) ?? null)).map((f) => f.result).find(Boolean) ?? null;
-    const store = shown && !/^-+$/.test(shown) ? shown : null;
-    if (store) run.note(`The tab is on ${store}: its rows go to that store's files`);
-    await walkScreen(run, ctx, screen, tab.id, queue, { kind, store });
-    await flushRun(run, ctx);
-    if (queue.length) {
-      run.note(`${queue.length} record(s) to capture from the pages the rows open`);
-      await captureItems(run, ctx, queue);
-    }
-    return await finishRun(run, ctx);
-  } catch (error) {
-    await finishRun(run, ctx, error);
-    throw error;
-  } finally {
-    clearInterval(keepAlive);
-    bulkInProgress = null;
-    await endJob();
-  }
-}
-
 // A record page read with no layout: every label and its value, every table
 // as a list of entries, from every frame of the tab (pageType.read:
 // "everything"). Labels become column keys (the standard ones where they
@@ -1534,35 +1607,20 @@ async function followEntryPages(crm, pageType, result) {
   }
 }
 
-// ---------------------------------------------------- the capture window
+// ---------------------------------------------------------- work tabs
 
-// A capture lives in ONE tab group ("CRM Capture") in the browser window
-// the user is working in: the capture page (status, progress, log) and,
-// next to it, the work tab in which the CRM pages are loaded one after
-// another. The work tab is the one shown while a capture runs, so the user
-// watches the CRM being read (and the browser draws it: a page that is not
-// shown is not rendered, and some grids then stay empty); the toolbar badge
-// counts the records meanwhile, and the capture page comes back to the
-// front when the run is over.
-const CONSOLE_URL = chrome.runtime.getURL('console/console.html');
+// Tabs the capture opens itself (only the page fallbacks need any), kept
+// together in one group and closed when the job ends.
 const GROUP = { title: 'CRM Capture', color: 'blue' };
-const work = { consoleTabId: null, windowId: null, groupId: null, tabs: [] }; // tabs: [{ id, busy, shown }]
+const work = { groupId: null, tabs: [] }; // tabs: [{ id, busy, shown }]
 
-// The capture page among the extension's own open pages: a tab's address
-// is not readable without the "tabs" permission, not even for our own pages.
-async function findConsoleTab() {
-  const pages = await chrome.runtime.getContexts({ contextTypes: ['TAB'] }).catch(() => []);
-  const page = pages.find((c) => (c.documentUrl || '').startsWith(CONSOLE_URL) && c.tabId >= 0);
-  return page ? chrome.tabs.get(page.tabId).catch(() => null) : null;
-}
-
-// Puts tabs in the capture's group (made around the capture page on first use).
+// Puts tabs in the capture's group (made in their window on first use).
 async function addToGroup(tabIds) {
   try {
     const alive = work.groupId != null && (await chrome.tabGroups.get(work.groupId).catch(() => null));
     if (alive) await chrome.tabs.group({ tabIds, groupId: work.groupId });
     else {
-      work.groupId = await chrome.tabs.group({ tabIds, createProperties: { windowId: work.windowId } });
+      work.groupId = await chrome.tabs.group({ tabIds });
       await chrome.tabGroups.update(work.groupId, GROUP);
     }
   } catch {
@@ -1570,35 +1628,13 @@ async function addToGroup(tabIds) {
   }
 }
 
-// The capture page: found, or opened beside the tab the user is on.
-// show: bring it to the front. Returns its window.
-async function ensureConsoleWindow({ show = true } = {}) {
-  let tab = await findConsoleTab();
-  if (!tab) {
-    const win = await chrome.windows.getLastFocused({ windowTypes: ['normal'] }).catch(() => null);
-    const [active] = win ? await chrome.tabs.query({ active: true, windowId: win.id }) : [];
-    tab = await chrome.tabs.create({ url: CONSOLE_URL, active: show, ...(win ? { windowId: win.id } : {}), ...(active ? { index: active.index + 1 } : {}) });
-    work.groupId = null;
-  } else if (show) {
-    await chrome.windows.update(tab.windowId, { focused: true }).catch(() => {});
-    await chrome.tabs.update(tab.id, { active: true }).catch(() => {});
-  }
-  work.consoleTabId = tab.id;
-  work.windowId = tab.windowId;
-  const grouped = tab.groupId != null && tab.groupId !== -1 ? await chrome.tabGroups.get(tab.groupId).catch(() => null) : null;
-  if (grouped) work.groupId = grouped.id;
-  else await addToGroup([tab.id]);
-  return tab.windowId;
-}
-
 chrome.tabs.onRemoved.addListener((tabId) => {
   work.tabs = work.tabs.filter((t) => t.id !== tabId);
 });
 
-// A new work tab: right after the capture page, in its group, shown.
+// A new work tab: after the other work tabs, in their group, shown.
 async function openWorkTab(url) {
-  const consoleTab = work.consoleTabId != null ? await chrome.tabs.get(work.consoleTabId).catch(() => null) : null;
-  const last = (await Promise.all(work.tabs.map((t) => chrome.tabs.get(t.id).catch(() => null)))).filter(Boolean).sort((a, b) => b.index - a.index)[0] ?? consoleTab;
+  const last = (await Promise.all(work.tabs.map((t) => chrome.tabs.get(t.id).catch(() => null)))).filter(Boolean).sort((a, b) => b.index - a.index)[0];
   const tab = await chrome.tabs.create({ url, active: true, ...(last ? { windowId: last.windowId, index: last.index + 1 } : {}) });
   await addToGroup([tab.id]);
   return tab;
@@ -1637,11 +1673,10 @@ async function withBackgroundTab(url, fn, { quick = false } = {}) {
   }
 }
 
-// Closes the work tabs once a job is over and shows the capture page again.
-async function endJob({ keepConsoleBehind = false } = {}) {
+// Closes the work tabs once a job is over.
+async function endJob() {
   const ids = work.tabs.map((t) => t.id);
   work.tabs = [];
-  if (!keepConsoleBehind && work.consoleTabId != null) await chrome.tabs.update(work.consoleTabId, { active: true }).catch(() => {});
   await Promise.all(ids.map((id) => chrome.tabs.remove(id).catch(() => {})));
 }
 
@@ -1754,7 +1789,7 @@ async function extractWithConfig(tabId, pageType) {
 // records: [{ fields: { key: value }, collections, pageUrl?, recordId?,
 // dataset? }]: one row each in the file of its kind (customers by default),
 // plus one message row per collection entry.
-async function save({ records = [], meta = {} }) {
+async function save({ records = [], meta = {}, writeFiles = true }) {
   const settings = await getSettings();
   const capturedAt = localTimestamp();
   const byKind = new Map();
@@ -1792,7 +1827,15 @@ async function save({ records = [], meta = {} }) {
       messagesTotal += messages.length;
       messagesAdded += fresh;
     }
-    const files = await writeDayFiles(date, settings, { only: [...byKind.keys()] });
+    // The records are now safely in storage (the source of truth). Rewriting the
+    // day's CSVs is a separate, throttled step so a long run doesn't rewrite the
+    // files every few seconds (which looks like something tampering with them);
+    // when writeFiles is false the caller will write them later / at the end.
+    const changedKeys = [...byKind.keys()];
+    if (!writeFiles) {
+      return { date, pendingKeys: changedKeys, added, updated, messagesAdded, saved: Object.fromEntries([...byKind].map(([k, rows]) => [k, rows.length])) };
+    }
+    const files = await writeDayFiles(date, settings, { only: changedKeys });
     return { date, messages: files.messages, added, updated, messagesAdded, saved: Object.fromEntries([...byKind].map(([k, rows]) => [k, rows.length])), ...files };
   });
 }
@@ -1847,15 +1890,20 @@ async function writeDayFiles(date, settings, { only = null } = {}) {
   }
   const out = { count, datasets, messages, filename: files.filter((f) => !/_(messages|reference)(_|\.)/.test(f.split('/').pop())).join(', '), messagesFilename, files };
   try {
-    for (const [name, csv] of jobs) await writeCsvFile(name, csv());
+    // One file at a time, each fully finished before the next starts, with a
+    // brief pause between them so the writes are calmly spaced rather than a
+    // simultaneous burst of downloads.
+    let first = true;
+    for (const [name, csv] of jobs) {
+      if (!first) await new Promise((r) => setTimeout(r, 400));
+      first = false;
+      await writeCsvFile(name, csv());
+    }
     await chrome.storage.local.remove('lastWriteError');
-    if (date === localDateKey()) await showCount(count);
     return out;
   } catch (error) {
     const fileError = `Saved in the extension, but the CSV files for ${date} couldn't be updated: ${error.message}.`;
     await chrome.storage.local.set({ lastWriteError: { date, message: fileError } });
-    await chrome.action.setBadgeBackgroundColor({ color: '#d1242f' });
-    await chrome.action.setBadgeText({ text: '!' });
     return { ...out, fileError };
   }
 }
@@ -1865,13 +1913,10 @@ async function status() {
   const date = localDateKey();
   const { datasets, count, messages } = await dayCounts(date);
   const { lastWriteError } = await chrome.storage.local.get('lastWriteError');
-  if (!lastWriteError) await showCount(count);
   // One file per kind: "<prefix>_<kind>_<date>.csv".
   const filename = csvFileName(settings, date, 'KIND', 'STORE').replace('KIND', '<kind>').replace('_STORE', '[_<store>]');
   return { date, count, datasets, messages, filename, files: Object.keys(datasets).map((key) => csvFileName(settings, date, ...key.split('@'))), lastWriteError: lastWriteError ?? null };
 }
 
-async function showCount(count) {
-  await chrome.action.setBadgeBackgroundColor({ color: '#2563eb' });
-  await chrome.action.setBadgeText({ text: count ? String(count) : '' });
-}
+// No number on the toolbar icon (clears one an earlier version left).
+chrome.action.setBadgeText({ text: '' });

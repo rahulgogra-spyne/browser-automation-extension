@@ -2,7 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <title>CRM Capture</title>
+    <title>Gather information</title>
     <link rel="stylesheet" href="base.css" />
     <link rel="stylesheet" href="console.css" />
   </head>
@@ -10,83 +10,33 @@
     <main class="console">
       <header class="console-head">
         <div>
-          <h1>CRM Capture</h1>
-          <p class="muted">Two ways to capture. <b>Capture whole CRM</b> replays the CRM's saved layout: menus, Search buttons, lists, records. <b>Capture this tab</b> is for screens the layout can't reach: open the list yourself in the CRM (menus, filters, press Search), then capture what is on screen; it is read page after page in that tab. Every value read goes to the log below and to today's CSV files.</p>
-        </div>
-        <div class="row">
-          <select id="crm-select" title="A CRM with a bundled layout"></select>
-          <button id="capture-crm" type="button" class="primary">Capture whole CRM</button>
-          <button id="open-settings" type="button">Settings</button>
+          <h1>Gather information</h1>
+          <p class="muted">Gathers the customers and vehicles of the CRM on screen and downloads them as CSV files when it finishes. You can close this popup: the capture keeps running.</p>
         </div>
       </header>
 
       <section id="site" class="card site-card">
         <div>
-          <h2 id="site-name">No CRM tab open</h2>
-          <p id="site-text" class="muted">Open a CRM in another tab; this window follows the tab you are using.</p>
-          <p id="site-grid" class="muted"></p>
-        </div>
-        <div class="row">
-          <button id="site-capture" type="button" class="primary" hidden>Capture whole CRM</button>
-          <select id="here-kind" title="What the rows are" hidden>
-            <option value="">auto-detect kind</option>
-            <option value="customers">customers / leads</option>
-            <option value="users">users / employees</option>
-            <option value="deals">deals</option>
-            <option value="appointments">appointments</option>
-            <option value="tasks">tasks</option>
-            <option value="vehicles">vehicles</option>
-            <option value="other">other</option>
-          </select>
-          <button id="here-capture" type="button" hidden title="Open the list in the CRM yourself (menus, filters, Search), then capture what is on screen, page after page">Capture this tab</button>
-          <button id="describe-tab" type="button" title="Write what the extension sees on this tab (frames, grids, buttons, selects, store switchers) to the log">Describe this tab</button>
-          <button id="inspect-tab" type="button" title="Save the structure of this tab (elements, captions, links, the drop-downs at the top and what they list; customer values masked) to a file in the download folder, for building or fixing this CRM's layout">Inspect this tab</button>
+          <h2 id="site-name">No CRM on screen</h2>
+          <p id="site-text" class="muted">Go to your CRM in this tab and sign in.</p>
         </div>
       </section>
 
-      <section id="now" class="card">
-        <div class="now-head">
-          <h2 id="now-title">Idle</h2>
-          <span id="now-time" class="muted"></span>
+      <section class="card start-card">
+        <div class="row start-row">
+          <button id="gather" type="button" class="primary" disabled>Gather information</button>
         </div>
-        <div class="map-bar"><div id="now-bar" class="map-bar-fill"></div></div>
+      </section>
+
+      <section id="now" class="card" hidden>
+        <h2 id="now-title"></h2>
         <p id="now-phase" class="phase"></p>
-        <div id="now-counts" class="counts"></div>
         <div class="row">
           <button id="cancel" type="button" hidden>Cancel</button>
           <button id="clear" type="button" hidden>Done</button>
+          <button id="retry" type="button" hidden>Download the files again</button>
           <span id="now-note" class="status"></span>
         </div>
-      </section>
-
-      <div class="columns">
-        <section class="card">
-          <h2>Captured in this run</h2>
-          <table id="recent">
-            <thead><tr><th>Record</th><th>Kind · store</th><th>Fields</th><th>Messages</th><th></th></tr></thead>
-            <tbody></tbody>
-          </table>
-          <p id="recent-empty" class="muted">Nothing yet.</p>
-        </section>
-        <section class="card">
-          <h2>Today's files</h2>
-          <p id="today" class="muted"></p>
-          <div class="row">
-            <button id="open-folder" type="button">Open Downloads folder</button>
-            <button id="retry" type="button" hidden>Write CSV again</button>
-          </div>
-        </section>
-      </div>
-
-      <section class="card">
-        <div class="now-head">
-          <h2>Log — every value read</h2>
-          <div class="row">
-            <label class="muted"><input id="follow" type="checkbox" checked /> follow</label>
-            <button id="save-log" type="button">Save log</button>
-          </div>
-        </div>
-        <pre id="log" class="map-log console-log console-log-tall"></pre>
       </section>
     </main>
     <script type="module" src="console.js"></script>
