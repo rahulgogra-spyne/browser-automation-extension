@@ -19,10 +19,15 @@
         "tasks",
         "vehicles"
       ],
-      "version": 12,
-      "mappedAt": "2026-10-05T14:01:30.509Z",
-      "mappedBy": "extension (server)",
+      "version": 13,
+      "mappedAt": "2026-10-13T13:30:00.000Z",
+      "mappedBy": "Claude (Claude in Chrome, read-only inspection of a signed-in session)",
       "history": [
+        {
+          "version": 13,
+          "at": "2026-10-13",
+          "reason": "NOTES + TASKS + APPOINTMENTS + TRADE added to the no-tabs capture via per-customer enrichPages: history.aspx (server-rendered Contacts tab) -> completed_activities (#gvOpptyHistory: notes/history log) + scheduled_activities (#gvScheduled: tasks + appointments) -> messages CSV; and OpptyDetails.aspx -> trade_in (OpportunityPanel trade vehicle, server-rendered after all — 8 of 40 customers had one). Both need only lPID={id}=PersonId plus the session on the store, so api.switchPath switches the session to each store before walking it and restores the original at the end. (Earlier belief that trade was React-only was wrong: the test customer simply had no trade.) CDK trade = trade vehicle description only, no $ value. PLUS free extras at no extra fetch: next-task fields from the prospect-list row (next_task/next_task_type/next_task_due/high_priority/deal_date) and contact fields from the same OpptyDetails page (email via PrefEmailLink, phone_mobile/home/work, birthday, preferred_language, city/state/zip) — empty cells skipped so they never clobber the JSON detail's values."
+        },
         {
           "version": 11,
           "mappedAt": "2026-10-07T14:00:00.000Z",
@@ -124,6 +129,8 @@
       "api": {
         "note": "CDK Unify (eLead v45). LIST: POST /evo2/api/ProspectData/GetProspectList on crm.connectcdk.com (cookie auth, sent automatically). Body params resolved at runtime from the signed-in tab cookies (companyId/employeeId/departmentIds/dates) via chrome.cookies — never stored here. Response is a ROOT ARRAY of prospect rows; each row already carries name/phone/vehicle/salesperson/source/company/date, so capture is LIST-ONLY (no per-record call needed). record.mode=\"none\". The CustomerInfoAjax.ashx endpoint seen in the UI is VIN-keyed vehicle hold data, not the full customer record, so it is not used. To add email/address later, discover the true per-prospect detail endpoint and set record.path + field paths. MULTI-STORE: api.stores lists the 4 stores to capture; each run loops them, tagging rows per store (per-store CSVs). employeeId/departmentIds fall back to the signed-in user when a store omits them (works if the account spans stores); if a store 500s or returns 0, set that store's employeeId/departmentIds explicitly. VEHICLES: see vehiclesNote and api.vehicles (Vehicle Search fetched per store).",
         "baseUrl": "https://crm.connectcdk.com",
+        "switchPath": "/evo2/fresh/elead-v45/elead_track/admin/SwitchCompany1.asp?ID={companyId}",
+        "switchNote": "eLead detail pages (OpptyDetails/history.aspx) resolve only for the store the session is on (cross-store they come back empty). With switchPath set, the capture switches the session to each store before walking it (GET SwitchCompany1.asp?ID=<companyId>) and restores the original store at the end — so per-customer enrichPages are fetched in-session for every store. Confirmed live 2026-10-13: after switching to 16654, GetProspectList still returns its 308 and history.aspx returns each customer's activities.",
         "headers": {
           "content-type": "application/json; charset=UTF-8",
           "x-requested-with": "XMLHttpRequest",
@@ -192,6 +199,54 @@
                     "activity_summary": "summary"
                   }
                 }
+              ],
+              "enrichPages": [
+                {
+                  "label": "activities",
+                  "note": "eLead history.aspx (the Contacts tab), server-rendered, fetched per customer in-session (needs only lPID={id}=PersonId + the session on the store via api.switchPath; lICID/lIUID/lDID are ignored). #gvOpptyHistory = the notes/history log (completed activities: calls, emails, notes); #gvScheduled = tasks + appointments (future, typed by the subject column, e.g. 'Sales Appointment'). Both -> messages CSV (channel inferred from the activity type). Confirmed live 2026-10-13: 16/61/135 completed and 6/5/2 scheduled across three customers.",
+                  "path": "/evo2/fresh/elead-v45/elead_track/newprospects/history.aspx?tab=liContacts&lPID={id}",
+                  "collections": {
+                    "completed_activities": {
+                      "container": "#gvOpptyHistory",
+                      "item": "tr.even, tr.odd",
+                      "fields": {
+                        "timestamp": { "sel": ":scope > td:nth-child(2)" },
+                        "channel": { "sel": ":scope > td:nth-child(3)" },
+                        "subject": { "sel": ":scope > td:nth-child(3)" },
+                        "outcome": { "sel": ":scope > td:nth-child(4)" },
+                        "body": { "sel": ":scope > td.TaskComments" },
+                        "sender": { "sel": ":scope > td.completedBy" }
+                      }
+                    },
+                    "scheduled_activities": {
+                      "container": "#gvScheduled",
+                      "item": "tr.even, tr.odd",
+                      "fields": {
+                        "timestamp": { "sel": ":scope > td:nth-child(1)" },
+                        "channel": { "sel": ":scope > td:nth-child(2)" },
+                        "subject": { "sel": ":scope > td:nth-child(2)" },
+                        "recipient": { "sel": ":scope > td:nth-child(3)" }
+                      }
+                    }
+                  }
+                },
+                {
+                  "label": "opportunity",
+                  "note": "OpptyDetails.aspx — one in-session fetch per customer (needs the session on the store via api.switchPath). Trade-in vehicle is server-rendered (confirmed live 2026-10-13: 8 of 40 had one, e.g. '2026 Ford Mustang GT Premium'; some rows append the decoded VIN; CDK has no separate $ value). The customer contact fields below are server-rendered in the same page, so they come free with the trade fetch; empty cells are skipped (extractHtmlInPage), so they never overwrite a value the JSON detail already set. Email label is PrefEmailLink (NOT EmailLink). city/state/zip split by regex from CityStateZipRow.",
+                  "path": "/evo2/fresh/elead-v45/elead_track/newprospects/OpptyDetails.aspx?lPID={id}",
+                  "fields": {
+                    "trade_in": { "sel": "td:has(#OpportunityPanel_TradeInLink) + td" },
+                    "email": { "sel": "td:has(#CustomerInfoPanel_PrefEmailLink) + td" },
+                    "phone_mobile": { "sel": "td:has(#CustomerInfoPanel_CPhoneLink) + td" },
+                    "phone_home": { "sel": "td:has(#CustomerInfoPanel_HPhoneLink) + td" },
+                    "phone_work": { "sel": "td:has(#CustomerInfoPanel_WPhoneLink) + td" },
+                    "birthday": { "sel": "td:has(#CustomerInfoPanel_BdayLink) + td" },
+                    "preferred_language": { "sel": "td:has(#CustomerInfoPanel_PrefLanguageLink) + td" },
+                    "city": { "sel": "#CustomerInfoPanel_CityStateZipRow td.headingBlack_11px", "regex": "^\\s*([^,]+)," },
+                    "state": { "sel": "#CustomerInfoPanel_CityStateZipRow td.headingBlack_11px", "regex": ",\\s*([A-Za-z]{2})\\b" },
+                    "zip": { "sel": "#CustomerInfoPanel_CityStateZipRow td.headingBlack_11px", "regex": "(\\d{5}(?:-\\d{4})?)\\s*$" }
+                  }
+                }
               ]
             },
             "listFields": {
@@ -205,7 +260,12 @@
               "vehicle": "Vehicle",
               "created_date": "ProspectIn",
               "deal_id": "DealId",
-              "person_id": "PersonId"
+              "person_id": "PersonId",
+              "next_task": "Task",
+              "next_task_type": "TaskType",
+              "next_task_due": "DueDate",
+              "high_priority": "HighPriority",
+              "deal_date": "DealDate"
             }
           }
         ],
@@ -1188,6 +1248,355 @@
             }
           }
         ]
+      }
+    },
+    "tekion-arc": {
+      "name": "Tekion ARC (CRM + DMS)",
+      "match": {
+        "hosts": [
+          "app.tekioncloud.com"
+        ]
+      },
+      "startUrl": "https://app.tekioncloud.com/home",
+      "targets": [
+        "customers",
+        "vehicles",
+        "appointments"
+      ],
+      "version": 1,
+      "mappedAt": "2026-10-14T00:00:00.000Z",
+      "mappedBy": "Claude (Claude in Chrome, read-only inspection of a signed-in session)",
+      "api": {
+        "note": "Tekion ARC — ONE app (app.tekioncloud.com) serving BOTH the CRM and the DMS; a modern React micro-frontend over a clean same-origin JSON API at /api/*. Signed in as dealer 6713 (Hyundai of Milledgeville), tenant hyundaiofmilledgevilledealergroup. AUTH: cookie session PLUS a required header set — a plain cookie fetch returns HTTP 400/500 ('identity' error) until the Tekion headers are sent. All header values are readable from localStorage: the JWT is `t_token`, and the identity fields (id, tenantName, dealerId, tekSiteId, originalUserId, originalTenantId, programId, applicationId, subApplicationId, productIds, roleId) are in the `t_user` JSON blob. api.storageParams reads them (new engine support: resolveStorageParams/readStorageInPage in api-capture.js) and api.headers templates them. Verified live 2026-10-14: the storage-built header set returned HTTP 200 with real data on every endpoint below.",
+        "baseUrl": "https://app.tekioncloud.com",
+        "windowDays": 30,
+        "tabUrl": "https://app.tekioncloud.com/home",
+        "storageParams": {
+          "tekionToken": { "ls": "t_token" },
+          "roleId": { "ls": "t_user", "field": "roleId" },
+          "userId": { "ls": "t_user", "field": "id" },
+          "tenantName": { "ls": "t_user", "field": "tenantName" },
+          "dealerId": { "ls": "t_user", "field": "dealerId" },
+          "tekSiteId": { "ls": "t_user", "field": "tekSiteId" },
+          "originalUserId": { "ls": "t_user", "field": "originalUserId" },
+          "originalTenantId": { "ls": "t_user", "field": "originalTenantId" },
+          "programId": { "ls": "t_user", "field": "programId" },
+          "applicationId": { "ls": "t_user", "field": "applicationId" },
+          "subApplicationId": { "ls": "t_user", "field": "subApplicationId" },
+          "productIds": { "ls": "t_user", "field": "productIds" }
+        },
+        "headers": {
+          "tekion-api-token": "{{tekionToken}}",
+          "roleId": "{{roleId}}",
+          "userId": "{{userId}}",
+          "tenantname": "{{tenantName}}",
+          "dealerId": "{{dealerId}}",
+          "tek-siteId": "{{tekSiteId}}",
+          "original-userid": "{{originalUserId}}",
+          "original-tenantid": "{{originalTenantId}}",
+          "clientId": "WEB",
+          "locale": "en_US",
+          "program": "{{programId}}",
+          "applicationId": "{{applicationId}}",
+          "subApplicationId": "{{subApplicationId}}",
+          "productIds": "{{productIds}}",
+          "content-type": "application/json",
+          "accept": "application/json"
+        },
+        "datasets": [
+          {
+            "dataset": "customers",
+            "entity": "customer (CRM + DMS)",
+            "note": "The Contacts list (/crm/contacts). ~451,799 records, group-wide. Confirmed live.",
+            "list": {
+              "method": "POST",
+              "path": "/api/crm-customer/u/list/search",
+              "paging": "offset",
+              "pageSize": 50,
+              "body": {
+                "sort": [],
+                "pageInfo": { "start": "{{offset}}", "rows": "{{limit}}" },
+                "searchText": "",
+                "filters": []
+              },
+              "itemsPath": "data.hits",
+              "idPath": "id",
+              "totalPath": "data.count"
+            },
+            "record": {
+              "mode": "none",
+              "identity": [ "full_name", "phone_mobile", "person_id" ],
+              "fields": {
+                "full_name": "fullName",
+                "first_name": "firstName",
+                "last_name": "lastName",
+                "phone_mobile": "mobileNumber",
+                "lead_status": "status",
+                "customer_type": "type",
+                "address": "address",
+                "person_id": "id",
+                "display_id": "displayId",
+                "dealer_id": "dealerId",
+                "created_date": "createdTime|date"
+              }
+            }
+          },
+          {
+            "dataset": "vehicles",
+            "entity": "inventory vehicle (CRM + DMS)",
+            "note": "Vehicle Inventory (/vi/vehicles). ~9,194 vehicles. Confirmed live.",
+            "list": {
+              "method": "POST",
+              "path": "/api/api-vi/u/v1.0.0/inventory/tenant/v2/search?langParam=en_US",
+              "paging": "offset",
+              "pageSize": 50,
+              "body": {
+                "sort": [],
+                "searchText": "",
+                "filters": [],
+                "pageInfo": { "start": "{{offset}}", "rows": "{{limit}}" }
+              },
+              "itemsPath": "data.hits",
+              "idPath": "id",
+              "totalPath": "data.count"
+            },
+            "record": {
+              "mode": "none",
+              "identity": [ "vin", "stock_number", "vehicle_id" ],
+              "fields": {
+                "vin": "vin",
+                "vehicle_year": "year",
+                "vehicle_make": "make",
+                "vehicle_model": "model",
+                "exterior_color": "exteriorColor",
+                "interior_color": "interiorColor",
+                "condition": "vehicleType",
+                "vehicle_id": "id",
+                "created_date": "createdTime|date"
+              }
+            }
+          },
+          {
+            "dataset": "services",
+            "entity": "op code / service (DMS)",
+            "note": "Opcode Management (/ro/opcode). ~1,431 op codes = the service catalog. Confirmed live.",
+            "list": {
+              "method": "POST",
+              "path": "/api/service-module/u/opcode/search",
+              "paging": "offset",
+              "pageSize": 50,
+              "body": {
+                "sort": [],
+                "pageInfo": { "start": "{{offset}}", "rows": "{{limit}}" },
+                "searchText": "",
+                "filters": []
+              },
+              "itemsPath": "data.hits",
+              "idPath": "id",
+              "totalPath": "data.count"
+            },
+            "record": {
+              "mode": "none",
+              "identity": [ "code", "name", "service_id" ],
+              "fields": {
+                "code": "opcode",
+                "name": "displayName",
+                "description": "description",
+                "short_description": "shortDescription",
+                "opcode_type": "opcodeType",
+                "category": "category",
+                "customer_description": "customerDescription",
+                "service_id": "id"
+              }
+            }
+          },
+          {
+            "dataset": "technicians_advisors",
+            "entity": "service advisor (DMS)",
+            "note": "Scheduling settings ▸ Service Advisors. POST body is a [startMs,endMs] epoch-ms window — use a BOUNDED range (0..far-future returns empty; the wired 2025..2027 range returns all). Returns data[] of advisors (advisorUserId + hours). Technicians (who do the work) are a separate roster — see endpointsCatalog dispatchUsers.",
+            "list": {
+              "method": "POST",
+              "path": "/api/scheduling/u/settings/serviceAdvisor/list",
+              "paging": "none",
+              "pageSize": 500,
+              "body": [ 1735689600000, 1798761600000 ],
+              "itemsPath": "data",
+              "idPath": "advisorUserId"
+            },
+            "record": {
+              "mode": "none",
+              "identity": [ "advisor_user_id" ],
+              "fields": {
+                "advisor_user_id": "advisorUserId",
+                "dealer_id": "dealerId",
+                "site_id": "siteId",
+                "hours": "hours"
+              }
+            }
+          },
+          {
+            "dataset": "working_hours",
+            "entity": "service shop / operating hours (DMS)",
+            "note": "Scheduling settings ▸ Shops. GET; returns data[] of shops with their operating-hours 'blocks'. Confirmed live.",
+            "list": {
+              "method": "GET",
+              "path": "/api/scheduling/u/settings/serviceShop",
+              "paging": "none",
+              "pageSize": 500,
+              "itemsPath": "data",
+              "idPath": "id"
+            },
+            "record": {
+              "mode": "none",
+              "identity": [ "shop_id", "name" ],
+              "fields": {
+                "shop_id": "id",
+                "name": "name",
+                "status": "status",
+                "default_shop": "defaultShop",
+                "service_advisors": "serviceAdvisors",
+                "hours": "blocks"
+              }
+            }
+          },
+          {
+            "dataset": "transportation",
+            "entity": "transportation option (DMS)",
+            "note": "Scheduling settings ▸ Transportation (loaner/shuttle/pickup-delivery). POST to the aggregated-settings endpoint with a requestOptions enum. Returns data[] of setting instances. Confirmed live.",
+            "list": {
+              "method": "POST",
+              "path": "/api/service-module/u/scheduling/aggregated-settings/fetch",
+              "paging": "none",
+              "pageSize": 100,
+              "body": { "requestOptions": [ "TRANSPORTATION_SETTINGS_SUMMARY" ] },
+              "itemsPath": "data",
+              "idPath": "instanceType"
+            },
+            "record": {
+              "mode": "none",
+              "identity": [ "instance_type" ],
+              "fields": {
+                "instance_type": "instanceType",
+                "settings": "settingDetails"
+              }
+            }
+          },
+          {
+            "dataset": "repair_orders",
+            "entity": "repair order (DMS)",
+            "note": "RO List (/ro/repair-orders/ro-list), ~20,430 ROs. The body is wrapped in `tableRequest`; the response rows are at data.tableRequest.hits (data.tableRequest.count = total). Only fields listed in includeFields are returned. Confirmed live 2026-10-14.",
+            "list": {
+              "method": "POST",
+              "path": "/api/service-module/u/ro/v2/search",
+              "paging": "offset",
+              "pageSize": 50,
+              "body": {
+                "tableRequest": {
+                  "pageInfo": { "start": "{{offset}}", "rows": "{{limit}}" },
+                  "sort": [ { "order": "DESC", "field": "createdTime" } ],
+                  "searchText": null,
+                  "filters": [ { "operator": "IN", "values": [ false ], "field": "migrated" } ],
+                  "searchFields": [ "CUSTOMER", "VEHICLE", "RO_NO", "TAG_NO", "PHONE", "FLEET_NO" ],
+                  "requestOptions": [ "LABEL" ],
+                  "includeFields": [ "id", "roNo", "status", "serviceAdvisorId", "assignedTechIds", "transportType", "promiseTime", "createdTime", "customerId", "vehicleId", "serviceMode", "appointmentId", "departmentId", "jobCount", "nonVoidedJobCount", "closedTime", "tagNo" ]
+                }
+              },
+              "itemsPath": "data.tableRequest.hits",
+              "idPath": "id",
+              "totalPath": "data.tableRequest.count"
+            },
+            "record": {
+              "mode": "none",
+              "identity": [ "ro_no", "ro_id" ],
+              "fields": {
+                "ro_no": "roNo",
+                "status": "status",
+                "advisor_id": "serviceAdvisorId",
+                "tech_ids": "assignedTechIds",
+                "transport_type": "transportType",
+                "promise_time": "promiseTime|date",
+                "created_date": "createdTime|date",
+                "customer_id": "customerId",
+                "vehicle_id": "vehicleId",
+                "service_mode": "serviceMode",
+                "appointment_id": "appointmentId",
+                "department_id": "departmentId",
+                "job_count": "jobCount",
+                "closed_time": "closedTime|date",
+                "tag_no": "tagNo",
+                "ro_id": "id"
+              }
+            }
+          },
+          {
+            "dataset": "appointments",
+            "entity": "service appointment (CRM + DMS)",
+            "note": "Appointments list (/dse-v2/appointments/list), ~21,936. Rows at data.data[] (data.count = total). customerInfo/vehicleInfo are nested objects (kept as JSON). Confirmed live 2026-10-14.",
+            "list": {
+              "method": "POST",
+              "path": "/api/scheduling/u/appointment/search",
+              "paging": "offset",
+              "pageSize": 50,
+              "body": {
+                "sort": [],
+                "pageInfo": { "start": "{{offset}}", "rows": "{{limit}}" },
+                "searchText": "",
+                "filters": []
+              },
+              "itemsPath": "data.data",
+              "idPath": "id",
+              "totalPath": "data.count"
+            },
+            "record": {
+              "mode": "none",
+              "identity": [ "appointment_no", "appointment_id" ],
+              "fields": {
+                "appointment_no": "apptNo",
+                "status": "appointmentStatus",
+                "appointment_type": "appointmentType",
+                "customer": "customerInfo",
+                "vehicle": "vehicleInfo",
+                "advisor": "serviceAdvisorName",
+                "advisor_id": "serviceAdvisorId",
+                "transport_type": "transportationType",
+                "shop": "shopName",
+                "ro_no": "roNo",
+                "appointment_date": "appointmentDateTime|date",
+                "end_time": "appointmentEndTime|date",
+                "customer_comments": "customerComments",
+                "created_date": "createdTime|date",
+                "appointment_id": "id"
+              }
+            }
+          }
+        ],
+        "endpointsCatalog": {
+          "note": "All endpoints found on app.tekioncloud.com (2026-10-14), same-origin /api/*, auth = cookie + the Tekion header set above. CONFIRMED-200 ones are wired as datasets; the TO-PIN ones have the endpoint but need the exact request body / response shape verified before wiring; PROBABLY-USEFUL are related endpoints seen in the network for richer data.",
+          "confirmed": {
+            "customers": "POST /api/crm-customer/u/list/search  body {sort,pageInfo:{start,rows,current},searchText,filters} -> data.hits[], data.count",
+            "vehicles": "POST /api/api-vi/u/v1.0.0/inventory/tenant/v2/search?langParam=en_US -> data.hits[]",
+            "services_opcodes": "POST /api/service-module/u/opcode/search -> data.hits[] (+ /api/service-module/u/opcode/serviceTypes, /opcode/skills)",
+            "service_advisors": "POST /api/scheduling/u/settings/serviceAdvisor/list  body [startMs,endMs] -> data[]",
+            "working_hours_shops": "GET /api/scheduling/u/settings/serviceShop -> data[] (hours in 'blocks')",
+            "transportation": "POST /api/service-module/u/scheduling/aggregated-settings/fetch  body {requestOptions:[\"TRANSPORTATION_SETTINGS_SUMMARY\"]} -> data[]",
+            "repair_orders": "POST /api/service-module/u/ro/v2/search  body {tableRequest:{pageInfo,sort,filters:[{IN,[false],migrated}],searchFields,requestOptions,includeFields}} -> data.tableRequest.hits, data.tableRequest.count (~20,430)",
+            "appointments": "POST /api/scheduling/u/appointment/search  body {sort,pageInfo:{start,rows},searchText,filters} -> data.data[], data.count (~21,936)"
+          },
+          "toPin": {
+            "leads": "CRM leads list — /api/crmlead/u/lightning-bolt-search returned {count,filters} (a filter-aggregation, not the list); the row list is likely /api/crmlead/u/list/search (parallel to crm-customer). Route /crm/leads. Pin body+shape.",
+            "notes": "Notes are PER ENTITY-TYPE: POST /api/notes/u/{ENTITYTYPE} (seen live: /api/notes/u/APPOINTMENTS; other types e.g. CUSTOMER/REPAIR_ORDER). The body takes the entity id(s) — it's a per-record enrichment, not one bulk 'all notes' list, so it fits the html/extraDetails per-record pattern rather than a standalone list dataset. Pin the body + entity-type values.",
+            "tasks_action_items": "CRM Tasks/Action Items — not located yet; likely a crmlead/activity or task API. To find on the CRM dashboard/contact timeline.",
+            "trade_vehicle": "CRM Trade Vehicle — not located yet; trade-ins live on a deal/desking record. To find in the Deal/Desking module."
+          },
+          "probablyUseful": {
+            "customer_metadata": "GET /api/crmsetup/u/metadata/CRM_CONTACT_LIST and /list-view/CRM_CONTACT_LIST — column/field metadata to extend the customer field map.",
+            "vehicle_kpi": "GET /api/api-vi/u/kpi/vehicleKPIResponse ; GET /api/api-vi/u/v1.0.0/metadata — vehicle field metadata.",
+            "dispatch_users": "POST /api/service-module/u/dispatch/users/latestAssignedWork and GET /api/rolesandpermissionservice/u/admin/roles — technicians/employees + roles (for the technician roster).",
+            "opcode_serviceTypes": "GET /api/service-module/u/opcode/serviceTypes, /opcode/skills — service type + skill lookups.",
+            "scheduling_settings": "GET /api/scheduling/u/settings/appointment (booking windows), POST /api/scheduling/u/settings/capacity/request/option {requestOption:[\"DEALERSHIP\"]} (capacity), POST /api/service-module/u/settings (service module settings).",
+            "accounting_gl": "GET /api/accounting/u/glAccount/all/active — GL accounts (if accounting data is wanted later)."
+          }
+        }
       }
     }
   }

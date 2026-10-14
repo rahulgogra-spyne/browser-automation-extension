@@ -1797,8 +1797,11 @@ async function save({ records = [], meta = {}, writeFiles = true }) {
   const byStore = new Map(); // store slug -> messages
   for (const record of records) {
     const wanted = record.dataset ?? meta.dataset ?? 'customers';
-    const dataset = datasetById(wanted)?.id ?? OTHER_DATASET;
-    const person = DATASETS[dataset]?.person ?? true;
+    // A registered kind normalises to its id; an explicit but unregistered one
+    // (e.g. a DMS dataset like repair_orders or working_hours) keeps its own name
+    // so it gets its own CSV instead of being merged into "other".
+    const dataset = datasetById(wanted)?.id ?? (wanted || OTHER_DATASET);
+    const person = DATASETS[dataset]?.person ?? false;
     const store = record.store ?? meta.store ?? '';
     const recordMeta = { ...meta, pageUrl: record.pageUrl || meta.pageUrl, recordId: record.recordId ?? meta.recordId, store };
     const built = await buildCapture({ records: [record], meta: recordMeta, settings, capturedAt, dataset, person });

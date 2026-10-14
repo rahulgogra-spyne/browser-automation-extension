@@ -207,6 +207,32 @@ async function resolveParams(where, windowDays) {
   return results?.[0]?.result ?? null;
 }
 
+// Reads header/body values out of the page's own localStorage, for apps that
+// authenticate with a token in storage rather than a cookie (e.g. Tekion: the
+// JWT in `t_token` and the identity fields in the `t_user` JSON blob). spec is
+// api.storageParams: { paramName: { ls: "<key>", field?: "<json field>" } }.
+// Runs in the tab's MAIN world so it sees the app's own storage.
+function readStorageInPage(spec) {
+  const out = {};
+  for (const [name, s] of Object.entries(spec || {})) {
+    try {
+      let v = localStorage.getItem(s.ls);
+      if (v != null && s.field) { try { v = JSON.parse(v)?.[s.field]; } catch { v = undefined; } }
+      if (v != null && v !== '') out[name] = Array.isArray(v) ? v.join(',') : String(v);
+    } catch { /* storage blocked */ }
+  }
+  return out;
+}
+
+async function resolveStorageParams(where, spec) {
+  if (!spec || !Object.keys(spec).length) return {};
+  const results = await execScript(
+    { target: where, world: 'MAIN', func: readStorageInPage, args: [spec] },
+    {},
+  ).catch(() => []);
+  return results?.[0]?.result ?? {};
+}
+
 // -------------------------------------------------- fetching in the CRM tab
 
 // Runs in the CRM tab's MAIN world: one fetch with the page's own session.
@@ -589,6 +615,9 @@ export async function captureDatasetViaApi({ tabId, frameId = null, origin, api,
   if ((list.method || 'GET').toUpperCase() === 'POST' && list.body) {
     if (!externalParams) params = (await resolveParams(where, api.windowDays)) || {};
   }
+  // Token-in-storage auth (Tekion): read the JWT + identity fields the headers
+  // need from the page's localStorage, and merge them in for header templating.
+  if (api.storageParams) params = { ...params, ...(await resolveStorageParams(where, api.storageParams)) };
 
   // The page a record is shown on: record.pageUrl ({id} and the list row's own
   // fields, e.g. {autoLeadId}), else CDK eLead's OpptyDetails page.
@@ -624,7 +653,15 @@ export async function captureDatasetViaApi({ tabId, frameId = null, origin, api,
     // that matches the signed-in session; other stores capture list fields only.
     // Headers that name the store (x-dealer-id) make the detail per store too.
     const storeInHeaders = /\{\{companyId\}\}/.test(JSON.stringify(api.headers || {}));
-    const detailAllowed = record.mode === 'none' || storeInHeaders || (params.companyId != null && String(store.companyId) === String(params.companyId));
+    // api.switchPath: the session is switched to each store in turn (eLead:
+    // admin/SwitchCompany1.asp?ID={companyId}), so its own server-rendered
+    // detail pages (OpptyDetails/history.aspx) resolve in-session for every
+    // store, not just the one the user was on.
+    if (api.switchPath && store.companyId != null) {
+      await apiGet(where, apiUrl(origin, api.baseUrl, fillPath(api.switchPath, { companyId: store.companyId })));
+      onNote(`  switched session to companyId=${store.companyId}`);
+    }
+    const detailAllowed = Boolean(api.switchPath) || record.mode === 'none' || storeInHeaders || (params.companyId != null && String(store.companyId) === String(params.companyId));
     if (list.body) {
       onNote(`Store "${storeTag || '(session)'}": companyId=${storeParams.companyId ?? '?'}, childCompanyId=${storeParams.childCompanyId ?? '?'}, employeeId=${storeParams.employeeId ?? '?'}, departmentIds=[${(storeParams.departmentIds || []).join(',')}]${record.mode && record.mode !== 'none' ? (detailAllowed ? ' — full detail' : ' — list fields only (not the session store)') : ''}`);
       const usesSessionIds = /\{\{(employeeId|departmentIds|selectedUserDeptId)\}\}/.test(JSON.stringify(list.body));
@@ -639,6 +676,11 @@ export async function captureDatasetViaApi({ tabId, frameId = null, origin, api,
     const listed = await walkStore(storeParams, storeTag, detailAllowed);
     if (listed === false) stats.failedStores.push({ ...store, name: storeTag });
     if (stats.found >= MAX_RECORDS) break;
+  }
+  // Leave the user's session on the store it started on.
+  if (api.switchPath && params.companyId != null) {
+    await apiGet(where, apiUrl(origin, api.baseUrl, fillPath(api.switchPath, { companyId: params.companyId })));
+    onNote(`Restored session to companyId=${params.companyId}`);
   }
   return stats;
 
@@ -826,6 +868,22 @@ export async function captureDatasetViaApi({ tabId, frameId = null, origin, api,
           anyDetailOk = true;
         } else {
           onNote(`Record ${id}: ${det.label || 'detail'} ${got.status ? `HTTP ${got.status}` : ''} (${got.error || 'failed'}) — skipped`);
+        }
+      }
+      // Per-record server-rendered HTML pages merged in (e.g. eLead
+      // history.aspx: completed + scheduled activities as collections). Fetched
+      // in-session (api.switchPath keeps the session on this store), parsed with
+      // extractHtmlInPage. record.enrichPages: [{ path, fields?, collections? }].
+      for (const ep of record.enrichPages || []) {
+        const epUrl = apiUrl(origin, api.baseUrl, fillPath(ep.path, { ...storeParams, ...(idToItem.get(id) || {}), id }));
+        const epGot = await apiExtractHtml(where, epUrl, ep);
+        if (epGot.ok) {
+          fields = { ...fields, ...epGot.fields };
+          for (const [n, e] of Object.entries(epGot.collections || {})) if (e.length) collections[n] = e;
+          if (!loggedFeed) { loggedFeed = true; onNote(`  record ${id} ${ep.label || 'enrich'} page [HTTP ${epGot.status}]: ${Object.values(epGot.collections || {}).reduce((n, l) => n + l.length, 0)} rows — ${epUrl}`); }
+        } else if (!loggedFeed) {
+          loggedFeed = true;
+          onNote(`  record ${id} ${ep.label || 'enrich'} page ${epGot.status ? `HTTP ${epGot.status}` : ''} (${epGot.error || 'failed'}) — ${epUrl}`);
         }
       }
       const missing = missingKeys(fields, record);
