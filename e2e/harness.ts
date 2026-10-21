@@ -297,12 +297,41 @@ export const RO_RESULT = {
   notes: '',
 };
 
-/** A complete, schema-shaped result for the VinSolutions account flow. */
+/** A complete, schema-shaped result for the VinSolutions customer flow. */
 export const RESULT = {
-  signed_in: true,
-  user_name: 'Dana Reyes',
   dealership: 'Lakeside Honda',
-  other_dealerships: ['Lakeside Toyota', 'Lakeside Kia'],
+  total_in_list: 1,
+  customers: [
+    {
+      full_name: 'Jordan Ellis',
+      company: null,
+      email: 'jordan@example.com',
+      email_2: null,
+      phone_mobile: '555-0100',
+      phone_work: null,
+      phone_home: null,
+      address: '1 Main St',
+      city: 'Springfield',
+      state: 'OH',
+      zip: '45501',
+      dealer_name: 'Lakeside Honda',
+      salesperson: 'Dana Reyes',
+      lead_source: 'Website',
+      lead_status: 'Active',
+      vehicle: '2024 Honda Civic',
+      vehicle_year: '2024',
+      vehicle_make: 'Honda',
+      vehicle_model: 'Civic',
+      stock_number: 'LH1234',
+      created_date: '10/01/26',
+    },
+  ],
+  leads: [],
+  vehicles: [],
+  appointments: [],
+  tasks: [],
+  trade_vehicles: [],
+  customer_notes: [],
   unavailable: ['Reports'],
   notes: '',
 };

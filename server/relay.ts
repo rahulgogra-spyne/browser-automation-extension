@@ -30,9 +30,9 @@ export function startRelay({ port = RELAY_PORT, key = readKey(), log = (m: strin
     // Any web page can reach localhost; only extension pages may spend the key.
     verifyClient: ({ origin }: { origin?: string }) => !!origin?.startsWith('chrome-extension://'),
   });
-  wss.on('listening', () => log(`VIN Flow relay on ws://127.0.0.1:${port} -> ${UPSTREAM}${key ? '' : ' (no OPENAI_API_KEY!)'}`));
+  wss.on('listening', () => log(`Spyne Report Helper relay on ws://127.0.0.1:${port} -> ${UPSTREAM}${key ? '' : ' (no OPENAI_API_KEY!)'}`));
   wss.on('error', (e: NodeJS.ErrnoException) =>
-    log(e.code === 'EADDRINUSE' ? `VIN Flow relay: port ${port} is taken, assuming a relay is already running there.` : `VIN Flow relay: ${e.message}`),
+    log(e.code === 'EADDRINUSE' ? `Spyne Report Helper relay: port ${port} is taken, assuming a relay is already running there.` : `Spyne Report Helper relay: ${e.message}`),
   );
 
   wss.on('connection', (client) => {
@@ -40,7 +40,7 @@ export function startRelay({ port = RELAY_PORT, key = readKey(), log = (m: strin
       if (client.readyState === WebSocket.OPEN) client.send(JSON.stringify({ type: 'error', status, error: { message } }));
       client.close(1011);
     };
-    if (!key) return fail(401, 'The VIN Flow relay has no OPENAI_API_KEY. Put it in .env and restart it.');
+    if (!key) return fail(401, 'The Spyne Report Helper relay has no OPENAI_API_KEY. Put it in .env and restart it.');
 
     const upstream = new WebSocket(UPSTREAM, { headers: { Authorization: `Bearer ${key}` } });
     // Keep each frame's kind: OpenAI closes the socket on a binary frame, and ws hands text
@@ -59,7 +59,7 @@ export function startRelay({ port = RELAY_PORT, key = readKey(), log = (m: strin
     let clientGone = false;
     upstream.on('close', (code, reason) => {
       // Only worth a log line when OpenAI hung up on its own, not after the panel left.
-      if (!clientGone && code !== 1000 && code !== 1005) log(`VIN Flow relay: OpenAI closed the socket (${code} ${reason})`);
+      if (!clientGone && code !== 1000 && code !== 1005) log(`Spyne Report Helper relay: OpenAI closed the socket (${code} ${reason})`);
       client.close();
     });
     client.on('close', () => {

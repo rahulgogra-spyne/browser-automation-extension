@@ -9,7 +9,7 @@ test('Start runs the Tekion flow in a new tab and shows the repair orders as a t
   await expect(s.panel.getByText(FLOWS.tekion.summary)).toBeVisible();
   s.replies.push(fn('submit_result', RO_RESULT));
   await start(s);
-  await expect.poll(() => tabGroup(s).then((g) => g?.title)).toMatch(/VIN Flow/); // grouped as soon as the run starts
+  await expect.poll(() => tabGroup(s).then((g) => g?.title)).toMatch(/Spyne Report Helper/); // grouped as soon as the run starts
   await finished(s, 20_000);
 
   const result = s.panel.getByTestId('result');
@@ -31,15 +31,16 @@ test('Start runs the Tekion flow in a new tab and shows the repair orders as a t
   await s.context.close();
 });
 
+// VinSolutions no longer runs the model (lib/vinsolutions-run.ts reads through the page), so this uses Tekion.
 test('picking another DMS in the panel runs that DMS flow', async () => {
   const s = await launch({ startPath: '/dashboard' });
-  await s.panel.getByRole('button', { name: 'VinSolutions' }).click();
-  await expect(s.panel.getByText(FLOWS.vinsolutions.summary)).toBeVisible();
-  s.replies.push(fn('submit_result', RESULT));
+  await s.panel.getByRole('button', { name: 'Tekion' }).click();
+  await expect(s.panel.getByText(FLOWS.tekion.summary)).toBeVisible();
+  s.replies.push(fn('submit_result', RO_RESULT));
   await start(s);
   await finished(s, 20_000);
-  expect(s.requests[0].input[0].content[0].text).toContain(FLOWS.vinsolutions.goal.split('\n')[0]);
-  await expect(s.panel.getByTestId('result')).toContainText('Lakeside Honda');
+  expect(s.requests[0].input[0].content[0].text).toContain(FLOWS.tekion.goal.split('\n')[0]);
+  await expect(s.panel.getByTestId('result')).toContainText('Lakeside Toyota');
   await s.context.close();
 });
 
@@ -51,7 +52,7 @@ test('signed out: hands over, resumes once the user is signed in, then submits',
   await expect(s.panel.getByText('Please sign in to VinSolutions.', { exact: true })).toBeVisible();
   await expect.poll(() => debuggerAttached(s)).toBe(false);
   // The tab strip says whose turn it is, even with the panel out of sight.
-  await expect.poll(() => tabGroup(s)).toEqual({ title: 'VIN Flow · your turn', color: 'yellow' });
+  await expect.poll(() => tabGroup(s)).toEqual({ title: 'Spyne Report Helper · your turn', color: 'yellow' });
   await expect(s.panel.getByText('Waiting for you', { exact: true })).toBeVisible(); // the tab's row
 
   // The dealer signs in: the login page, then the app.
@@ -61,9 +62,9 @@ test('signed out: hands over, resumes once the user is signed in, then submits',
   await expect(s.panel.locator('[data-state="handoff"]')).toBeVisible();
   await tab.goto(`${ORIGIN}/dashboard`);
   await finished(s, 20_000);
-  await expect(s.panel.getByText('Lakeside Honda')).toBeVisible();
+  await expect(s.panel.getByRole('definition').filter({ hasText: 'Lakeside Honda' })).toBeVisible();
   expect(JSON.parse(s.requests[1].input[0].output[0].text).resumed).toBe(`The page moved on to ${ORIGIN}/dashboard after the user acted.`);
-  await expect.poll(() => tabGroup(s)).toEqual({ title: 'VIN Flow · done', color: 'green' });
+  await expect.poll(() => tabGroup(s)).toEqual({ title: 'Spyne Report Helper · done', color: 'green' });
   await s.context.close();
 });
 
@@ -222,7 +223,7 @@ test('password manager popup on the sign-in page: steps back, asks to sign in, r
   expect(await debuggerAttached(s)).toBe(false);
   await flowTab(s).goto(`${ORIGIN}/dashboard`); // signed in: no popup on the app
   await finished(s, 20_000);
-  await expect(s.panel.getByText('Lakeside Honda')).toBeVisible();
+  await expect(s.panel.getByRole('definition').filter({ hasText: 'Lakeside Honda' })).toBeVisible();
   await expect(s.panel.getByText('The tab was closed.')).toBeHidden();
   // The pending call was answered with the page as it is now.
   expect(s.requests[1].input[0]).toMatchObject({ type: 'computer_call_output', output: { type: 'computer_screenshot' } });
@@ -237,7 +238,7 @@ test('another extension popup on a normal page: asks to close it, resumes on Con
   await flowTab(s).evaluate(() => document.getElementById('fake-pm')?.remove()); // the user closes the popup
   await s.panel.getByRole('button', { name: 'Continue' }).click().catch(() => {}); // may already have resumed by itself
   await finished(s, 20_000);
-  await expect(s.panel.getByText('Lakeside Honda')).toBeVisible();
+  await expect(s.panel.getByRole('definition').filter({ hasText: 'Lakeside Honda' })).toBeVisible();
   await s.context.close();
 });
 
@@ -246,7 +247,7 @@ test('a model that only talks gets one reminder to submit', async () => {
   s.replies.push(say('You are Dana Reyes at Lakeside Honda.'), fn('submit_result', RESULT));
   await start(s);
   await finished(s, 20_000);
-  await expect(s.panel.getByText('Lakeside Toyota, Lakeside Kia')).toBeVisible();
+  await expect(s.panel.getByText('Jordan Ellis', { exact: true })).toBeVisible();
   expect(s.requests[1].input[0].content[0].text).toBe('Please call submit_result with what you found.');
   await s.context.close();
 });
@@ -265,7 +266,7 @@ test('Stop mid-run releases the tab, and Run again starts fresh', async () => {
   s.replies.push(fn('submit_result', RESULT));
   await start(s);
   await finished(s, 20_000);
-  await expect(s.panel.getByText('Lakeside Honda')).toBeVisible();
+  await expect(s.panel.getByRole('definition').filter({ hasText: 'Lakeside Honda' })).toBeVisible();
   expect(s.requests[1].previous_response_id).toBeUndefined();
   await s.context.close();
 });

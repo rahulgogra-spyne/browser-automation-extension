@@ -113,7 +113,7 @@ export async function blockedReason(tab: Tab, action: ComputerAction, scale: num
       return inspect(tab, p, 'click', ro);
     }
   }
-  return `an action VIN Flow doesn't know (${(action as { type: string }).type})`;
+  return `an action Spyne Report Helper doesn't know (${(action as { type: string }).type})`;
 }
 
 async function inspect(tab: Tab, p: { x: number; y: number }, mode: 'click' | 'scroll', ro: ReadOnly): Promise<string | null> {
@@ -122,12 +122,12 @@ async function inspect(tab: Tab, p: { x: number; y: number }, mode: 'click' | 's
       expression: `(${inspectPoint.toString()})(${p.x}, ${p.y}, ${JSON.stringify(mode)}, ${JSON.stringify(ro.allowedHosts)}, ${JSON.stringify(ro.clicks)}, ${JSON.stringify(ro.urls.map(pageKey))})`,
       returnByValue: true,
     });
-    if (res.exceptionDetails) return `a ${mode} VIN Flow couldn't check (the page raised an error)`;
+    if (res.exceptionDetails) return `a ${mode} Spyne Report Helper couldn't check (the page raised an error)`;
     const verdict = res.result?.value as { allow?: unknown; block?: unknown } | undefined;
     if (verdict?.allow === true) return null;
-    return typeof verdict?.block === 'string' ? verdict.block : `a ${mode} VIN Flow couldn't check`;
+    return typeof verdict?.block === 'string' ? verdict.block : `a ${mode} Spyne Report Helper couldn't check`;
   } catch (e) {
-    return `a ${mode} VIN Flow couldn't check (${(e as Error).message})`;
+    return `a ${mode} Spyne Report Helper couldn't check (${(e as Error).message})`;
   }
 }
 
@@ -192,7 +192,7 @@ function inspectPoint(
       } catch {
         inner = null;
       }
-      if (!inner) return { block: 'reaching into a frame VIN Flow cannot inspect' };
+      if (!inner) return { block: 'reaching into a frame Spyne Report Helper cannot inspect' };
       const r = frame.getBoundingClientRect();
       const scaled = (a: number, b: number) => b > 0 && Math.abs(a / b - 1) > 0.01;
       if (scaled(r.width, frame.offsetWidth) || scaled(r.height, frame.offsetHeight) || transformed(frame)) return { block: 'reaching into a transformed frame' };
@@ -213,7 +213,7 @@ function inspectPoint(
     resolved = true;
     break;
   }
-  if (!el) return { block: `a ${mode} where VIN Flow found nothing to inspect` };
+  if (!el) return { block: `a ${mode} where Spyne Report Helper found nothing to inspect` };
   if (!resolved) return { block: `a ${mode} on something nested too deeply to inspect` };
 
   // Everything the event reaches on its way up, shadow hosts included.
@@ -274,7 +274,7 @@ function inspectPoint(
   if (mode === 'scroll') {
     const over = [control, ...outer].find(wheelChanges);
     if (over) return { block: `scrolling over ${describe(over)}, which can change its value` };
-    if (el.tagName.includes('-') && !(el as HTMLElement).shadowRoot && !el.childElementCount && !(el.textContent ?? '').trim()) return { block: 'scrolling over a component VIN Flow cannot inspect' };
+    if (el.tagName.includes('-') && !(el as HTMLElement).shadowRoot && !el.childElementCount && !(el.textContent ?? '').trim()) return { block: 'scrolling over a component Spyne Report Helper cannot inspect' };
     return { allow: true };
   }
 
@@ -309,7 +309,7 @@ function inspectPoint(
         try {
           u = new URL(a.href);
         } catch {
-          return `following ${what}, a link VIN Flow can't read`;
+          return `following ${what}, a link Spyne Report Helper can't read`;
         }
         if (!hostOk(u.hostname.toLowerCase())) return `following ${what} off the DMS (${u.hostname})`;
         // Paging stays on this page (maybe with another query); anything else is somewhere the flow doesn't go.
@@ -324,8 +324,8 @@ function inspectPoint(
     if (why) return { block: why };
   }
 
-  // A component with no open shadow root and no surrounding control: VIN Flow can't see what it does.
-  if (control === el && el.tagName.includes('-') && !(el as HTMLElement).shadowRoot) return { block: 'clicking a component VIN Flow cannot inspect' };
+  // A component with no open shadow root and no surrounding control: Spyne Report Helper can't see what it does.
+  if (control === el && el.tagName.includes('-') && !(el as HTMLElement).shadowRoot) return { block: 'clicking a component Spyne Report Helper cannot inspect' };
 
   // The allowlist: only controls the flow names (e.g. paging) may be clicked, judged by the
   // control's own accessible name. A bare number or arrow is only paging inside the page's pager

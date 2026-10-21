@@ -27,7 +27,7 @@ const MANIFEST_KEY =
 // grants all of it in the single install prompt and nothing is requested at
 // runtime.
 //   debugger   drive the tab (screenshots + real mouse/keyboard input via CDP).
-//              Chrome shows its "VIN Flow started debugging this browser" bar while
+//              Chrome shows its "Spyne Report Helper started debugging this browser" bar while
 //              attached. That bar is the consent signal and cannot be hidden
 //              from an extension.
 //   sidePanel  the UI; the agent loop runs there, so closing it stops the agent.
@@ -62,7 +62,7 @@ export default defineConfig({
     },
   }),
   manifest: {
-    name: 'VIN Flow',
+    name: 'Spyne Report Helper',
     description: 'Runs one fixed VinSolutions flow on your behalf: you sign in, it does the rest and hands back the result.',
     key: MANIFEST_KEY,
     permissions: ['debugger', 'sidePanel', 'tabs', 'tabGroups'],
@@ -74,7 +74,7 @@ export default defineConfig({
       128: '/icons/icon128.png',
     },
     action: {
-      default_title: 'Open VIN Flow',
+      default_title: 'Open Spyne Report Helper',
       default_icon: {
         16: '/icons/icon16.png',
         32: '/icons/icon32.png',
@@ -85,7 +85,7 @@ export default defineConfig({
     commands: {
       _execute_action: {
         suggested_key: { default: 'Alt+Shift+V', mac: 'Alt+Shift+V' },
-        description: 'Open VIN Flow',
+        description: 'Open Spyne Report Helper',
       },
     },
   },

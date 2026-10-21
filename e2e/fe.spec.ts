@@ -5,7 +5,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { FLOWS } from '../lib/flows';
-import { ORIGIN, RESULT, RO_RESULT, debuggerAttached, fn, launch, signIn } from './harness';
+import { ORIGIN, RO_RESULT, debuggerAttached, fn, launch, signIn } from './harness';
 
 test('without the extension the page asks for it', async () => {
   // Same fixture server, plain Chromium: nothing installed.
@@ -13,7 +13,7 @@ test('without the extension the page asks for it', async () => {
   const context = await chromium.launchPersistentContext(mkdtempSync(path.join(process.env.CLAUDE_SCRATCH ?? tmpdir(), 'vin-flow-')), { channel: 'chromium', headless: true });
   const fe = await context.newPage();
   await fe.goto(`${ORIGIN}/fe`);
-  await expect(fe.getByText('Install the VIN Flow extension')).toBeVisible();
+  await expect(fe.getByText('Install the Spyne Report Helper extension')).toBeVisible();
   await expect(fe.getByRole('button', { name: 'Start' })).toBeHidden();
   await context.close();
 });
@@ -23,7 +23,7 @@ test('the page detects the extension, starts the flow, and gets the handoff and 
   const fe = await s.context.newPage();
   // The product passes the customer's DMS; the demo takes it from ?dms=.
   await fe.goto(`${ORIGIN}/fe?dms=tekion`);
-  await expect(fe.getByText('VIN Flow is installed')).toBeVisible();
+  await expect(fe.getByText('Spyne Report Helper is installed')).toBeVisible();
   await expect(fe.getByText('v0.1.0')).toBeVisible();
   await expect(fe.getByRole('heading', { name: 'Connect Tekion' })).toBeVisible();
 
@@ -70,16 +70,17 @@ test('the DMS the product passes picks the flow, and an unsupported one gets a c
   const s = await launch({ panel: false });
   const fe = await s.context.newPage();
   await fe.goto(`${ORIGIN}/fe?dms=reynolds`);
-  await expect(fe.getByText('VIN Flow is installed')).toBeVisible();
+  await expect(fe.getByText('Spyne Report Helper is installed')).toBeVisible();
   await fe.getByRole('button', { name: 'Start' }).click();
-  await expect(fe.getByText('VIN Flow doesn\'t support the DMS "reynolds" yet. Supported: Tekion, VinSolutions.')).toBeVisible();
+  await expect(fe.getByText('Spyne Report Helper doesn\'t support the DMS "reynolds" yet. Supported: Tekion, VinSolutions, CDK eLead, Dealr.cloud.')).toBeVisible();
   expect(s.requests).toHaveLength(0);
 
-  await fe.goto(`${ORIGIN}/fe?dms=vinsolutions`);
-  s.replies.push(fn('submit_result', RESULT));
+  // Tekion, not VinSolutions: VinSolutions reads through the page now (lib/vinsolutions-run.ts), not the model.
+  await fe.goto(`${ORIGIN}/fe?dms=tekion`);
+  s.replies.push(fn('submit_result', RO_RESULT));
   await fe.getByRole('button', { name: 'Start' }).click();
   await expect(fe.getByText('This is the data your backend would receive.')).toBeVisible({ timeout: 20_000 });
-  expect(s.requests[0].input[0].content[0].text).toContain(FLOWS.vinsolutions.goal.split('\n')[0]);
+  expect(s.requests[0].input[0].content[0].text).toContain(FLOWS.tekion.goal.split('\n')[0]);
   await s.context.close();
 });
 
@@ -87,7 +88,7 @@ test('one run at a time: a second Start is refused, and a DMS that is not text g
   const s = await launch({ panel: false });
   const fe = await s.context.newPage();
   await fe.goto(`${ORIGIN}/fe?dms=tekion`);
-  await expect(fe.getByText('VIN Flow is installed')).toBeVisible();
+  await expect(fe.getByText('Spyne Report Helper is installed')).toBeVisible();
   // Buttons that send raw commands, clicked for real so Chrome counts the gesture.
   await fe.evaluate((id) => {
     const w = window as any;
@@ -115,16 +116,16 @@ test("a run's progress and data go only to the tab that started it", async () =>
   const b = await s.context.newPage();
   await a.goto(`${ORIGIN}/fe?dms=tekion`);
   await b.goto(`${ORIGIN}/fe?dms=tekion`);
-  await expect(b.getByText('VIN Flow is installed')).toBeVisible();
+  await expect(b.getByText('Spyne Report Helper is installed')).toBeVisible();
   s.replies.push(fn('wait_for_user', { message: 'Please sign in to Tekion.' }), fn('submit_result', RO_RESULT));
   await a.bringToFront();
   await a.getByRole('button', { name: 'Start' }).click();
   await expect(a.getByText('Please sign in to Tekion.', { exact: true })).toBeVisible({ timeout: 20_000 });
-  await expect(b.locator('#running')).toBeVisible(); // B knows VIN Flow is busy...
+  await expect(b.locator('#running')).toBeVisible(); // B knows Spyne Report Helper is busy...
   await expect(b.getByText('Please sign in to Tekion.', { exact: true })).toBeHidden(); // ...but not the details
   await signIn(s);
   await expect(a.getByText('This is the data your backend would receive.')).toBeVisible({ timeout: 20_000 });
-  await expect(b.getByText('VIN Flow is installed')).toBeVisible(); // back to ready, never shown the data
+  await expect(b.getByText('Spyne Report Helper is installed')).toBeVisible(); // back to ready, never shown the data
   await expect(b.locator('#records')).toBeEmpty();
   await s.context.close();
 });

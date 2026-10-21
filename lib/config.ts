@@ -1,4 +1,4 @@
-// VIN Flow is configured in code, not by the user. Change these values and rebuild.
+// Spyne Report Helper is configured in code, not by the user. Change these values and rebuild.
 // The API key lives only in the relay (server/relay.ts), never in the extension.
 
 export type Effort = 'none' | 'low' | 'medium' | 'high';

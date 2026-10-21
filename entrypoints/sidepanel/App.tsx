@@ -1,5 +1,10 @@
 import { Fragment, useEffect, useId, useRef, useState, type ButtonHTMLAttributes, type ReactNode } from 'react';
 import { runAgent, type LogEntry } from '@/lib/agent';
+import { collectVinSolutions } from '@/lib/vinsolutions-run';
+import { collectCdkElead } from '@/lib/cdk-elead-run';
+import { collectDealr } from '@/lib/dealr-run';
+import { fieldsCsv, makeZip, toCsv } from '@/lib/export';
+import { collectTekionRo } from '@/lib/tekion-ro-run';
 import { CONFIG } from '@/lib/config';
 import { DEFAULT_DMS, FLOWS, type DmsId, type Flow } from '@/lib/flows';
 import { openai } from '@/lib/openai';
@@ -211,7 +216,7 @@ export function App() {
         const granted = await new Promise<{ runId?: number; error?: string }>((resolve) => {
           reservation.current = resolve;
           send({ type: 'flow.reserve', dms: flow.dms });
-          setTimeout(() => resolve({ error: 'VIN Flow could not reach its background service. Close and reopen this panel.' }), 5000);
+          setTimeout(() => resolve({ error: 'Spyne Report Helper could not reach its background service. Close and reopen this panel.' }), 5000);
         });
         reservation.current = null;
         if (granted.runId == null) {
@@ -246,7 +251,16 @@ export function App() {
       const tab = await chrome.tabs.create({ url: 'about:blank', active: true });
       use(tab.id!);
 
-      const result = await runAgent({
+      // VinSolutions reads its data through the signed-in page (lib/vinsolutions-run.ts); the other DMSs run the agent.
+      const result = flow.dms === 'dealr'
+        ? await collectDealr({ tabId: tab.id!, log: push, signal: abort.signal })
+        : flow.dms === 'tekion'
+        ? await collectTekionRo({ tabId: tab.id!, log: push, signal: abort.signal })
+        : flow.dms === 'cdk'
+        ? await collectCdkElead({ tabId: tab.id!, log: push, signal: abort.signal })
+        : flow.dms === 'vinsolutions'
+        ? await collectVinSolutions({ tabId: tab.id!, startUrl, log: push, signal: abort.signal })
+        : await runAgent({
         tabId: tab.id!,
         startUrl,
         task: flow.goal,
@@ -341,8 +355,8 @@ export function App() {
     <div className="flex h-full flex-col" data-state={mode}>
       <header inert={zoomed} className="relative flex h-11 shrink-0 items-center gap-2 border-b border-line px-4">
         <FlowMark />
-        <span className="font-semibold tracking-[-0.01em]">VIN Flow</span>
-        {mode !== 'ready' && <span className="ml-auto truncate text-xs text-muted">{flow.title}</span>}
+        <span className="font-semibold tracking-[-0.01em]">Spyne Report Helper</span>
+        <span className="ml-auto rounded-full bg-accent-soft px-2.5 py-0.5 text-[11px] font-medium text-accent-ink">Read-only</span>
         {/* A thin bar under the header says, from across the room, whether it's working or waiting for you. */}
         {(mode === 'working' || mode === 'handoff') && <span className={`progress ${mode}`} aria-hidden />}
       </header>
@@ -353,6 +367,8 @@ export function App() {
         ) : (
           // Pinned: the state (and "your turn") stays in view while the details scroll under it.
           <div className="sticky top-0 z-10 bg-bg">
+            {/* The stages come first, then the status line. */}
+            <Stages flow={flow} mode={mode} steps={steps} />
             <StatusBlock mode={mode} outcome={outcome} handoff={handoff} step={stepText} elapsed={elapsed} actions={actionsTaken} tab={currentTab} tokens={tokens} />
           </div>
         )}
@@ -360,7 +376,6 @@ export function App() {
         {tabs.length > 0 && <Tabs tabs={tabs} current={current} mode={mode} />}
         {/* Keyed on the run so each one starts with the default open/closed state. */}
         <LiveView key={`live-${clock.start}`} steps={steps} shots={shots} mode={mode} onZoom={setZoom} />
-        {steps.length > 0 && <Steps key={`steps-${clock.start}`} steps={steps} start={clock.start} />}
         <div ref={bottomRef} />
       </main>
 
@@ -421,7 +436,7 @@ function Intro({ flow, onPick }: { flow: Flow; onPick: (dms: DmsId) => void }) {
       <h2 className="mt-6 border-t border-line pt-5 text-xs font-medium text-muted">While it runs</h2>
       <ul className="mt-2 space-y-2">
         {[
-          'Its tab sits in a VIN Flow tab group.',
+          'Its tab sits in a Spyne Report Helper tab group.',
           `If ${flow.dmsName} asks you to sign in, it waits. It can't see what you type.`,
           'Chrome shows a "started debugging this browser" bar. Stop, Esc, or Cancel on that bar gives you control back.',
         ].map((text) => (
@@ -478,7 +493,7 @@ function StatusBlock(props: {
         {mode === 'handoff' && handoff && (
           <>
             <p className="mt-1.5 text-[14px] whitespace-pre-wrap">{handoff.message}</p>
-            <p className="mt-1.5 text-xs text-muted">VIN Flow has let go of the tab and can't see what you type. It continues by itself once you're through, or press Continue.</p>
+            <p className="mt-1.5 text-xs text-muted">Spyne Report Helper has let go of the tab and can't see what you type. It continues by itself once you're through, or press Continue.</p>
             <div className="mt-3.5 flex gap-2">
               {tab && <Button onClick={() => void focusTab(tab.id)}>Go to tab</Button>}
               <Button kind={tab ? 'secondary' : 'primary'} onClick={handoff.done}>
@@ -626,7 +641,7 @@ function Lightbox({ steps, shots, index, onIndex, onClose }: { steps: Step[]; sh
       </div>
       <div ref={scroller} className="flex min-h-0 flex-1 overflow-auto" onClick={(e) => e.target === e.currentTarget && onClose()}>
         <div className="relative m-auto shrink-0" style={{ width: shot.width, height: shot.height }}>
-          <img src={shot.dataUrl} alt="What VIN Flow saw" className="block size-full" />
+          <img src={shot.dataUrl} alt="What Spyne Report Helper saw" className="block size-full" />
           <Markers points={points} shot={shot} />
         </div>
       </div>
@@ -635,29 +650,6 @@ function Lightbox({ steps, shots, index, onIndex, onClose }: { steps: Step[]; sh
 }
 
 /** The log, folded by default: the status block already says what it's doing now. */
-function Steps({ steps, start }: { steps: Step[]; start: number }) {
-  const [open, setOpen] = useState(false);
-  const rows = steps.filter((s) => s.entry.kind !== 'screenshot');
-  return (
-    <Disclosure title="Steps" meta={<span className="text-xs text-muted tabular-nums">{rows.length}</span>} open={open} onToggle={() => setOpen(!open)}>
-      <ol className="space-y-1.5">
-        {rows.map((s, i) => {
-          const e = s.entry;
-          if (e.kind === 'screenshot') return null;
-          const tone =
-            e.kind === 'blocked' ? 'text-warn' : e.kind === 'error' ? 'text-danger' : e.kind === 'thinking' || e.kind === 'info' || e.kind === 'task' ? 'text-muted' : '';
-          return (
-            <li key={`${s.at}-${i}`} className="fade-in grid grid-cols-[2.25rem_1fr] gap-2 text-xs">
-              <span className="text-muted tabular-nums">{stamp(s.at - start)}</span>
-              <span className={`min-w-0 break-words ${tone} ${e.kind === 'thinking' ? 'italic' : ''}`}>{e.kind === 'message' ? linkify(e.text) : e.text}</span>
-            </li>
-          );
-        })}
-      </ol>
-    </Disclosure>
-  );
-}
-
 function Result({ data }: { data: Record<string, unknown> }) {
   const [copied, setCopied] = useState(false);
   const json = JSON.stringify(data, null, 2);
@@ -674,7 +666,10 @@ function Result({ data }: { data: Record<string, unknown> }) {
             {copied ? 'Copied' : 'Copy JSON'}
           </Button>
           <Button kind="ghost" size="sm" onClick={() => download(json)}>
-            Download
+            JSON
+          </Button>
+          <Button kind="secondary" size="sm" onClick={() => downloadZip(data)}>
+            Download all (ZIP)
           </Button>
         </div>
       </div>
@@ -688,9 +683,87 @@ function Result({ data }: { data: Record<string, unknown> }) {
           ))}
         </dl>
       )}
-      {lists.map(([key, value]) => (
-        <Records key={key} name={humanize(key)} rows={value as Record<string, unknown>[]} />
+      {lists.map(([key, value], i) => (
+        <DatasetSection
+          key={key}
+          name={humanize(key)}
+          rows={value as Record<string, unknown>[]}
+          defaultOpen={i === 0}
+          onJson={() => download(JSON.stringify(value, null, 2), key)}
+          onCsv={() => saveFile(new Blob([toCsv(value as Record<string, unknown>[])], { type: 'text/csv' }), `${key}-${stampNow()}.csv`)}
+        />
       ))}
+    </section>
+  );
+}
+
+/** One dataset of the result: a dropdown with its count and its own Download button. */
+function DatasetSection({ name, rows, defaultOpen, onJson, onCsv }: { name: string; rows: Record<string, unknown>[]; defaultOpen: boolean; onJson: () => void; onCsv: () => void }) {
+  const [open, setOpen] = useState(defaultOpen);
+  const id = useId();
+  return (
+    <section className="border-t border-line">
+      <div className="flex h-11 items-center gap-2 px-4">
+        <button onClick={() => setOpen(!open)} aria-expanded={open} aria-controls={id} className="flex min-w-0 flex-1 items-center gap-2 text-left focus-visible:-outline-offset-2">
+          <Chevron dir={open ? 'down' : 'right'} className="text-muted" />
+          <span className="font-medium">{name}</span>
+          <span className="rounded-full bg-accent-soft px-2 text-[11px] font-medium text-accent-ink tabular-nums">{rows.length}</span>
+        </button>
+        <Button kind="ghost" size="sm" onClick={onJson}>
+          JSON
+        </Button>
+        <Button kind="ghost" size="sm" onClick={onCsv}>
+          CSV
+        </Button>
+      </div>
+      {open && (
+        <div id={id} className="pb-4">
+          <Records name={name} rows={rows} bare />
+        </div>
+      )}
+    </section>
+  );
+}
+
+/**
+ * The stages of a run, as the screenshot shows them: done, the one in progress, and what is still to come.
+ * Read from the run's own log: the sign-in wait and the reading start are what tell them apart.
+ */
+function stagesOf(flow: Flow, mode: Mode, steps: Step[]): { label: string; state: 'done' | 'active' | 'pending'; you?: boolean }[] {
+  const texts = steps.flatMap((s) => (s.entry.kind === 'info' ? [s.entry.text] : []));
+  const waiting = mode === 'handoff' || texts.some((t) => /^Sign in to /.test(t));
+  const signedIn = texts.some((t) => /^Reading /.test(t));
+  const stages: { label: string; state: 'done' | 'active' | 'pending'; you?: boolean }[] = [{ label: `Open ${flow.dmsName}`, state: 'done' }];
+  // Done once the run is past sign-in: it read the data, finished, or never had to wait (already signed in).
+  const past = signedIn || mode === 'done' || (mode === 'working' && !waiting);
+  const signIn = past && mode !== 'handoff' ? 'done' : waiting ? 'active' : 'pending';
+  stages.push({ label: `Sign in to ${flow.dmsName}`, state: signIn, you: true });
+  const reading = mode === 'done' ? 'done' : mode === 'working' && (signedIn || !waiting) ? 'active' : 'pending';
+  stages.push({ label: 'Read the data', state: reading });
+  stages.push({ label: 'Save the result', state: mode === 'done' ? 'done' : 'pending' });
+  return stages;
+}
+
+function Stages({ flow, mode, steps }: { flow: Flow; mode: Mode; steps: Step[] }) {
+  const rows = stagesOf(flow, mode, steps);
+  return (
+    <section className="border-b border-line px-2 py-2">
+      <ol className="space-y-0.5">
+        {rows.map((r, i) => (
+          <li key={i} className={`flex items-center gap-3 rounded-md px-2 py-2 text-[13px] ${r.state === 'active' ? 'bg-warn-soft' : ''}`} aria-current={r.state === 'active' ? 'step' : undefined}>
+            <span
+              className={`flex size-5 shrink-0 items-center justify-center rounded-full border ${
+                r.state === 'done' ? 'border-ok bg-ok text-white' : r.state === 'active' ? 'border-warn bg-warn' : 'border-line text-transparent'
+              }`}
+              aria-hidden
+            >
+              {r.state === 'done' && <svg viewBox="0 0 16 16" className="size-3" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M3.5 8.5l3 3 6-7" /></svg>}
+            </span>
+            <span className={`min-w-0 flex-1 ${r.state === 'pending' ? 'text-muted' : ''}`}>{r.label}</span>
+            {r.you && <span className="rounded-full bg-surface px-2 py-0.5 text-[11px] font-medium text-muted">You</span>}
+          </li>
+        ))}
+      </ol>
     </section>
   );
 }
@@ -768,10 +841,6 @@ function duration(ms: number): string {
 }
 
 /** m:ss, for the step log. */
-function stamp(ms: number): string {
-  const s = Math.max(0, Math.round(ms / 1000));
-  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
-}
 
 /** A list of objects (e.g. repair orders) is shown as a table. */
 function isRecords(value: unknown): boolean {
@@ -791,7 +860,8 @@ function summarize(data: Record<string, unknown>): string | null {
  * Edge to edge, so the narrow panel shows as many columns as it can. The first column stays put
  * while the rest scroll sideways, and a fade on the right says there are more.
  */
-function Records({ name, rows }: { name: string; rows: Record<string, unknown>[] }) {
+/** `bare`: just the table, for a dataset dropdown that already has its heading and Download button. */
+function Records({ name, rows, onDownload, bare = false }: { name: string; rows: Record<string, unknown>[]; onDownload?: () => void; bare?: boolean }) {
   const columns = Object.keys(rows[0]!);
   const scroller = useRef<HTMLDivElement>(null);
   const [edges, setEdges] = useState({ scrolled: false, more: false });
@@ -806,13 +876,20 @@ function Records({ name, rows }: { name: string; rows: Record<string, unknown>[]
     return () => observer.disconnect();
   }, []);
   return (
-    <div className="mt-5">
-      <h3 className="flex items-baseline gap-1.5">
-        <span className="font-medium">{name}</span>
-        <span className="text-xs text-muted tabular-nums">{rows.length}</span>
-      </h3>
-      <div className="relative -mx-4 mt-2">
-        <div ref={scroller} onScroll={measure} data-scrolled={edges.scrolled || undefined} className="max-h-80 overflow-auto border-t border-line">
+    <div className={bare ? '' : 'mt-5'}>
+      {!bare && (
+        <h3 className="flex items-center gap-1.5">
+          <span className="font-medium">{name}</span>
+          <span className="text-xs text-muted tabular-nums">{rows.length}</span>
+          {onDownload && (
+            <Button kind="ghost" size="sm" className="-my-1 ml-auto" onClick={onDownload}>
+              Download {name.toLowerCase()}
+            </Button>
+          )}
+        </h3>
+      )}
+      <div className={`relative -mx-4 ${bare ? '' : 'mt-2'}`}>
+        <div ref={scroller} onScroll={measure} data-scrolled={edges.scrolled || undefined} className={`${bare ? '' : 'max-h-80'} overflow-auto border-t border-line`}>
           <table className="records w-full border-collapse text-left text-xs">
             <thead>
               <tr>
@@ -860,28 +937,39 @@ function show(value: unknown): ReactNode {
   return String(value);
 }
 
-function download(json: string) {
+/** Saves `json` as a file. `part` names one section of the result (e.g. "leads"), so each section can be its own file. */
+function stampNow(): string {
+  return new Date().toISOString().slice(0, 19).replace(/:/g, '-');
+}
+
+function saveFile(blob: Blob, filename: string) {
   const a = document.createElement('a');
-  a.href = URL.createObjectURL(new Blob([json], { type: 'application/json' }));
-  a.download = `vin-flow-${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.json`;
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
   a.click();
   URL.revokeObjectURL(a.href);
 }
 
-function linkify(text: string): ReactNode[] {
-  return text.split(/(https?:\/\/[^\s)]+)/g).map((part, i) =>
-    /^https?:\/\//.test(part) ? (
-      <a key={i} href={part} target="_blank" rel="noreferrer" className="underline break-all">
-        {part}
-      </a>
-    ) : (
-      part
-    ),
-  );
+/** The whole result as JSON, or one dataset as JSON (`part`). */
+function download(json: string, part?: string) {
+  saveFile(new Blob([json], { type: 'application/json' }), part ? `${part}-${stampNow()}.json` : `result-${stampNow()}.json`);
 }
 
+/** Every list in the result as its own CSV, plus the plain fields as summary.csv, in one ZIP. */
+function downloadZip(data: Record<string, unknown>) {
+  const files: { name: string; text: string }[] = [];
+  const fields: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(data)) {
+    if (isRecords(value)) files.push({ name: `${key}.csv`, text: toCsv(value as Record<string, unknown>[]) });
+    else fields[key] = value;
+  }
+  files.push({ name: 'summary.csv', text: fieldsCsv(fields) });
+  saveFile(new Blob([makeZip(files).slice().buffer as ArrayBuffer], { type: 'application/zip' }), `result-${stampNow()}.zip`);
+}
+
+
 const KIND = {
-  primary: 'bg-fg text-bg hover:opacity-85',
+  primary: 'bg-accent text-white hover:opacity-90',
   secondary: 'border border-line text-fg hover:bg-surface',
   ghost: 'text-muted hover:bg-surface hover:text-fg',
 };
@@ -900,15 +988,21 @@ function Kbd({ children }: { children: ReactNode }) {
 }
 
 /** The extension's icon, in the panel's own colours. */
+/** The Spyne mark: a violet gradient tile with a white "S". */
 function FlowMark() {
   return (
-    <svg viewBox="0 0 128 128" className="size-4 shrink-0" aria-hidden>
-      <rect width="128" height="128" rx="30" className="fill-fg" />
-      <g fill="none" className="stroke-bg" strokeWidth="9" strokeLinecap="round">
-        <circle cx="64" cy="64" r="28" />
-        <circle cx="64" cy="64" r="7" className="fill-bg" stroke="none" />
-        <path d="M64 20v16M64 92v16M20 64h16M92 64h16M33 33l11 11M84 84l11 11M33 95l11-11M84 44l11-11" />
-      </g>
+    <svg viewBox="0 0 128 128" className="size-6 shrink-0" aria-hidden>
+      <defs>
+        <linearGradient id="spyne-mark" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stopColor="#6d4aff" />
+          <stop offset="1" stopColor="#3a1fc9" />
+        </linearGradient>
+      </defs>
+      <rect width="128" height="128" rx="28" fill="url(#spyne-mark)" />
+      <text x="64" y="88" textAnchor="middle" fontSize="72" fontWeight="700" fontFamily="ui-sans-serif, system-ui, sans-serif" fill="#fff">
+        S
+      </text>
     </svg>
   );
 }
+

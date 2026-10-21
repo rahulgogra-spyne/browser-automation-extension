@@ -1,4 +1,4 @@
-# VIN Flow
+# Spyne Report Helper
 
 A fixed, read-only job run by a Chrome extension on the dealer's behalf, one flow per DMS. Your
 product tells it which DMS the customer uses; the dealer presses **Start**; the extension opens
@@ -109,7 +109,7 @@ held back, the run stops).
 **2. A network firewall** ([`lib/firewall.ts`](lib/firewall.ts)), switched on before the DMS page
 loads (the run starts from a blank tab), in the page, in frames from other sites, and (through the
 page) in the page's own workers. Chrome holds each new frame and worker until it is protected; a
-kind VIN Flow doesn't know stays held. Every XHR/fetch/form/beacon request, to any host, pauses
+kind Spyne Report Helper doesn't know stays held. Every XHR/fetch/form/beacon request, to any host, pauses
 first:
 
 - GET passes; PUT, PATCH and DELETE never leave the browser;
@@ -154,8 +154,8 @@ scrolls and reads, and blocks edits and write requests", not "can never change a
 ## Seeing what it's doing
 
 - **Tab strip:** the tab the flow uses goes into a Chrome tab group whose label and colour follow
-  the run: blue "VIN Flow · working", yellow "VIN Flow · your turn", green "VIN Flow · done", red
-  "VIN Flow · error", grey "VIN Flow · stopped" (the group dissolves 20s after the run). The
+  the run: blue "Spyne Report Helper · working", yellow "Spyne Report Helper · your turn", green "Spyne Report Helper · done", red
+  "Spyne Report Helper · error", grey "Spyne Report Helper · stopped" (the group dissolves 20s after the run). The
   toolbar icon carries a matching badge. `lib/presence.ts`.
 - **Side panel:** a pinned status line that answers "what is it doing" or "what do you need to
   do": Working with the current step; Your turn with the agent's message, Go to tab and Continue;

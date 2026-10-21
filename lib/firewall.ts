@@ -308,7 +308,7 @@ export function decide(p: Paused, seen: Set<string>, learning: boolean, reads: R
     body = bodyOf(p.request);
     key = endpoint(method, url, body);
   } catch {
-    return { allow: false, key: label, label }; // a URL that doesn't parse is nothing VIN Flow can judge
+    return { allow: false, key: label, label }; // a URL that doesn't parse is nothing Spyne Report Helper can judge
   }
   if (method === 'GET' || method === 'HEAD' || method === 'OPTIONS') {
     // GraphQL over GET: the query string carries the document (servers should refuse a mutation
@@ -319,7 +319,7 @@ export function decide(p: Paused, seen: Set<string>, learning: boolean, reads: R
   }
   if (method !== 'POST') return { allow: false, key, label };
   if (graphqlOperations(body)?.some((op) => op.write)) return { allow: false, key, label };
-  // Multipart and other raw bodies can carry a GraphQL document VIN Flow didn't parse.
+  // Multipart and other raw bodies can carry a GraphQL document Spyne Report Helper didn't parse.
   if (body && parseJson(body) === undefined && !isForm(body) && /\bmutation\b/i.test(body)) return { allow: false, key, label };
   if (learning) {
     if (body !== null) seen.add(key); // an unreadable body passes while loading, but is never remembered

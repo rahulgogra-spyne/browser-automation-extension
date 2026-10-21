@@ -71,7 +71,7 @@ export class ResponsesSocket {
       ws.onclose = () => {
         clearTimeout(timer);
         if (this.ws === ws) this.ws = undefined;
-        reject(new Dropped(`Can't reach the VIN Flow relay at ${this.url}. Start it with pnpm dev (or pnpm relay).`));
+        reject(new Dropped(`Can't reach the Spyne Report Helper relay at ${this.url}. Start it with pnpm dev (or pnpm relay).`));
       };
     }).finally(() => (this.opening = undefined));
     return this.opening;
@@ -91,7 +91,7 @@ export class ResponsesSocket {
         else if (e.type === 'response.failed') finish(() => reject(new Error(e.response?.error?.message ?? 'The model failed to respond.')));
         else if (e.type === 'error') finish(() => reject(new ApiError(e.status ?? 400, e.error?.message)));
       };
-      const onClose = () => finish(() => reject(new Dropped(`Lost the connection to the VIN Flow relay at ${this.url}.`)));
+      const onClose = () => finish(() => reject(new Dropped(`Lost the connection to the Spyne Report Helper relay at ${this.url}.`)));
       // There is no cancel event, and a socket runs one response at a time: closing is how a Stop
       // frees the lane for the next task. The next turn reconnects.
       const onAbort = () => finish(() => (ws.close(), reject(signal!.reason)));

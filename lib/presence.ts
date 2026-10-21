@@ -1,16 +1,16 @@
 // Shows, outside the panel, which tab the extension is using and whether it needs you:
-// - the tab goes into a Chrome tab group whose colour and label ("VIN Flow · <state>") follow the
+// - the tab goes into a Chrome tab group whose colour and label ("Spyne Report Helper · <state>") follow the
 //   run's state, so it stands out in the tab strip even when the panel is closed or you're in another tab;
 // - the toolbar icon gets a matching badge.
 
 export type Presence = 'working' | 'handoff' | 'done' | 'error' | 'stopped';
 
 const LOOK: Record<Presence, { title: string; color: `${chrome.tabGroups.Color}`; badge: string; badgeColor: string }> = {
-  working: { title: 'VIN Flow · working', color: 'blue', badge: '…', badgeColor: '#2563eb' },
-  handoff: { title: 'VIN Flow · your turn', color: 'yellow', badge: '!', badgeColor: '#d97706' },
-  done: { title: 'VIN Flow · done', color: 'green', badge: '✓', badgeColor: '#16a34a' },
-  error: { title: 'VIN Flow · error', color: 'red', badge: '!', badgeColor: '#dc2626' },
-  stopped: { title: 'VIN Flow · stopped', color: 'grey', badge: '', badgeColor: '#6b7280' },
+  working: { title: 'Spyne Report Helper · working', color: 'blue', badge: '…', badgeColor: '#2563eb' },
+  handoff: { title: 'Spyne Report Helper · your turn', color: 'yellow', badge: '!', badgeColor: '#d97706' },
+  done: { title: 'Spyne Report Helper · done', color: 'green', badge: '✓', badgeColor: '#16a34a' },
+  error: { title: 'Spyne Report Helper · error', color: 'red', badge: '!', badgeColor: '#dc2626' },
+  stopped: { title: 'Spyne Report Helper · stopped', color: 'grey', badge: '', badgeColor: '#6b7280' },
 };
 
 /** How long a finished run keeps its group before the tab goes back to normal. */
@@ -19,7 +19,7 @@ const LINGER_MS = 20_000;
 let groupId: number | undefined;
 let ungroupTimer: ReturnType<typeof setTimeout> | undefined;
 
-/** Put `tabId` in the VIN Flow group (creating it if needed) and show `state`. Never throws. */
+/** Put `tabId` in the Spyne Report Helper group (creating it if needed) and show `state`. Never throws. */
 export async function mark(tabId: number, state: Presence): Promise<void> {
   clearTimeout(ungroupTimer);
   const look = LOOK[state];

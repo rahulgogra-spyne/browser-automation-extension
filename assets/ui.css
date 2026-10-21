@@ -4,35 +4,30 @@
   Neutral greys and hairline separators. One accent (the working state, markers, focus) and
   semantic colour only where it carries meaning: your turn, done, errors. No gradients or glows.
 */
+/*
+  Spyne Report Helper: white cards, hairline separators, one violet accent (the brand mark, primary
+  actions, the working state), lavender tint for badges, and amber/green/red only where they carry meaning.
+*/
 :root {
   --background: oklch(1 0 0);
-  --surface: oklch(0.965 0 0);
+  --surface: oklch(0.975 0.005 285);
   --raised: oklch(1 0 0);
-  --foreground: oklch(0.2 0 0);
-  --muted: oklch(0.52 0 0);
-  --line: oklch(0.905 0 0);
-  --accent: oklch(0.55 0.17 258);
-  --warn: oklch(0.53 0.14 62);
-  --ok: oklch(0.55 0.15 152);
-  --danger: oklch(0.55 0.2 27);
+  --foreground: oklch(0.22 0.02 280);
+  --muted: oklch(0.55 0.02 280);
+  --line: oklch(0.92 0.01 285);
+  --accent: oklch(0.5 0.24 285);
+  --accent-soft: oklch(0.95 0.03 285);
+  --accent-ink: oklch(0.42 0.2 285);
+  --warn: oklch(0.6 0.15 70);
+  --warn-soft: oklch(0.97 0.035 80);
+  --ok: oklch(0.6 0.15 152);
+  --ok-soft: oklch(0.96 0.04 152);
+  --danger: oklch(0.56 0.2 27);
+  --danger-soft: oklch(0.97 0.02 27);
   color-scheme: light;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: oklch(0.16 0 0);
-    --surface: oklch(0.205 0 0);
-    --raised: oklch(0.3 0 0);
-    --foreground: oklch(0.93 0 0);
-    --muted: oklch(0.64 0 0);
-    --line: oklch(0.27 0 0);
-    --accent: oklch(0.72 0.14 258);
-    --warn: oklch(0.8 0.14 78);
-    --ok: oklch(0.75 0.15 152);
-    --danger: oklch(0.72 0.17 25);
-    color-scheme: dark;
-  }
-}
+/* Light only, like the design: the panel does not follow the system's dark mode. */
 
 @theme inline {
   --color-bg: var(--background);
@@ -42,9 +37,14 @@
   --color-muted: var(--muted);
   --color-line: var(--line);
   --color-accent: var(--accent);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-ink: var(--accent-ink);
   --color-warn: var(--warn);
+  --color-warn-soft: var(--warn-soft);
   --color-ok: var(--ok);
+  --color-ok-soft: var(--ok-soft);
   --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
 }
 
 html,

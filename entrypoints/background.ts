@@ -95,7 +95,7 @@ export default defineBackground(() => {
           // The panel is busy with a run this background lost track of: this start can't happen.
           const r = live();
           if (!r || r.id !== msg.runId || r.panel !== port || !r.pending) return;
-          toFes({ type: 'error', message: 'VIN Flow is already running in that window. Try again when it finishes.' });
+          toFes({ type: 'error', message: 'Spyne Report Helper is already running in that window. Try again when it finishes.' });
           run = null;
           toFes(stateEvent());
           return;
@@ -125,7 +125,7 @@ export default defineBackground(() => {
         return;
       }
       // The panel running the run is gone: the run is over.
-      toFes({ type: 'stopped', message: 'The VIN Flow panel was closed, so the run stopped.' });
+      toFes({ type: 'stopped', message: 'The Spyne Report Helper panel was closed, so the run stopped.' });
       run = null;
       toFes(stateEvent());
     });
@@ -157,12 +157,14 @@ export default defineBackground(() => {
         const flow = flowFor(msg.dms);
         if (!flow) {
           const known = Object.values(FLOWS).map((f) => f.dmsName).join(', ');
-          return reply({ ok: false, error: `VIN Flow doesn't support the DMS "${String(msg.dms)}" yet. Supported: ${known}.` });
+          return reply({ ok: false, error: `Spyne Report Helper doesn't support the DMS "${String(msg.dms)}" yet. Supported: ${known}.` });
         }
         // Reserved now, so a second Start is refused while this one opens the panel.
         const mine: Run = { id: ++seq, dms: flow.dms, windowId: sender.tab?.windowId, ownerTab: sender.tab?.id, state: 'idle', pending: true, at: Date.now() };
         run = mine;
-        // Must be the first async step: Chrome allows this only while the FE's click counts as a user gesture.
+        // The side panel opens beside the page that started it, and the CRM opens in its own tab (the
+        // panel's run does that). Must be the first async step: Chrome allows the panel only while the
+        // page's click counts as a user gesture. The panel announces itself when it loads (see flow.hello).
         chrome.sidePanel.open({ windowId: sender.tab!.windowId }).then(
           () => {
             if (run !== mine) return reply({ ok: false, error: 'Stopped before it started.' }); // a Stop won the race

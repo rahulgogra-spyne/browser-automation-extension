@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Connect your DMS</title>
     <!--
-      Reference front end for VIN Flow: what the product page does to detect the extension, start
+      Reference front end for Spyne Report Helper: what the product page does to detect the extension, start
       the flow and receive the result. The protocol is in lib/protocol.ts. Serve it from an origin
       listed in externally_connectable (localhost works out of the box): `pnpm fe`.
     -->
@@ -131,11 +131,11 @@
       <h1>Connect <span class="dms-name">your DMS</span></h1>
       <p class="sub">We pull your dealership data from <span class="dms-name">your DMS</span> for you. You only sign in.</p>
 
-      <section class="card" id="checking"><div class="body muted">Checking for the VIN Flow extension…</div></section>
+      <section class="card" id="checking"><div class="body muted">Checking for the Spyne Report Helper extension…</div></section>
 
       <section class="card" id="install" hidden>
         <div class="body">
-          <div class="head"><span class="dot"></span><strong>Install the VIN Flow extension</strong></div>
+          <div class="head"><span class="dot"></span><strong>Install the Spyne Report Helper extension</strong></div>
           <ol>
             <li>Open <code>chrome://extensions</code> and turn on Developer mode.</li>
             <li>Click <strong>Load unpacked</strong> and pick the <code>vin-flow/build/vin-flow-chrome</code> folder.</li>
@@ -146,7 +146,7 @@
 
       <section class="card" id="ready" hidden>
         <div class="body">
-          <div class="head"><span class="dot ok"></span><strong>VIN Flow is installed</strong><span class="meta" id="version"></span></div>
+          <div class="head"><span class="dot ok"></span><strong>Spyne Report Helper is installed</strong><span class="meta" id="version"></span></div>
           <p id="summary"></p>
           <p class="error" id="start-error" hidden></p>
         </div>
@@ -165,7 +165,7 @@
               <button id="go">Go to the <span class="dms-name">DMS</span> tab</button>
               <button class="secondary" id="continue">I'm done, continue</button>
             </div>
-            <p class="muted">VIN Flow can't see what you type there, and picks up by itself once you're through.</p>
+            <p class="muted">Spyne Report Helper can't see what you type there, and picks up by itself once you're through.</p>
           </div>
           <div class="tab" id="tab" hidden>
             <img id="tab-icon" alt="" />
@@ -175,7 +175,7 @@
           <ul class="log" id="log"></ul>
         </div>
         <div class="foot">
-          <span>Each step also shows in the VIN Flow panel beside the <span class="dms-name">DMS</span> tab.</span>
+          <span>Each step also shows in the Spyne Report Helper panel beside the <span class="dms-name">DMS</span> tab.</span>
           <button class="secondary" id="stop">Stop</button>
         </div>
       </section>
@@ -233,8 +233,8 @@
         $('version').textContent = `v${hello.version}`;
         if (!Array.isArray(hello.flows)) {
           // An older extension that predates per-DMS flows.
-          $('failed-title').textContent = 'Update VIN Flow';
-          $('failed-message').textContent = 'This page needs a newer VIN Flow extension. Update it, then reload this page.';
+          $('failed-title').textContent = 'Update Spyne Report Helper';
+          $('failed-message').textContent = 'This page needs a newer Spyne Report Helper extension. Update it, then reload this page.';
           return show('failed');
         }
         flows = hello.flows;
@@ -295,7 +295,7 @@
             if (event.dms && event.dms !== dms) {
               // Busy with another tab's run.
               const other = (flows.find((f) => f.dms === event.dms) || {}).dmsName || event.dms;
-              $('running-title').textContent = `VIN Flow is busy with a ${other} run`;
+              $('running-title').textContent = `Spyne Report Helper is busy with a ${other} run`;
               $('running').dataset.state = 'busy';
               $('turn').hidden = true;
               return show('running');
@@ -339,7 +339,7 @@
         const flow = flows.find((f) => f.dms === id);
         document.querySelectorAll('.dms-name').forEach((el) => (el.textContent = dmsName()));
         document.title = `Connect ${dmsName()}`;
-        $('summary').textContent = flow ? flow.summary : `VIN Flow doesn't list ${id} as a supported DMS yet.`;
+        $('summary').textContent = flow ? flow.summary : `Spyne Report Helper doesn't list ${id} as a supported DMS yet.`;
       }
 
       const ACRONYMS = { ro: 'RO', vin: 'VIN', id: 'ID', url: 'URL', dms: 'DMS' };

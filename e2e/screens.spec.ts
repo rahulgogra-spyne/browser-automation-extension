@@ -106,7 +106,7 @@ for (const scheme of ['light', 'dark'] as const) {
     const s = await launch({ panel: false });
     const bare = await plain.newPage();
     await bare.goto(`${ORIGIN}/fe?dms=tekion`);
-    await bare.getByText('Install the VIN Flow extension').waitFor();
+    await bare.getByText('Install the Spyne Report Helper extension').waitFor();
     await bare.screenshot({ path: `${OUT}/fe-install-${scheme}.png` });
     await plain.close();
 
@@ -114,7 +114,7 @@ for (const scheme of ['light', 'dark'] as const) {
     await fe.setViewportSize({ width: 760, height: 560 });
     await fe.emulateMedia({ colorScheme: scheme });
     await fe.goto(`${ORIGIN}/fe?dms=tekion`);
-    await fe.getByText('VIN Flow is installed').waitFor();
+    await fe.getByText('Spyne Report Helper is installed').waitFor();
     await fe.screenshot({ path: `${OUT}/fe-ready-${scheme}.png` });
     s.replies.push(fn('wait_for_user', { message: "Please sign in to Tekion. I'll pick up once you're in." }), fn('submit_result', { ...RO_RESULT, repair_orders: FULL_LIST }));
     await fe.getByRole('button', { name: 'Start' }).click();
