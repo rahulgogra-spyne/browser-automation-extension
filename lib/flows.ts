@@ -39,7 +39,7 @@ export interface Flow {
   result: { properties: Record<string, object>; required: string[] };
 }
 
-export type DmsId = 'tekion' | 'vinsolutions' | 'cdk' | 'dealr';
+export type DmsId = 'tekion' | 'vinsolutions' | 'cdk' | 'dealr' | 'cdk_inventory';
 
 const nullableString = (description: string) => ({ type: ['string', 'null'], description });
 
@@ -251,7 +251,30 @@ const TEKION_RO: Flow = {
   },
 };
 
-export const FLOWS: Record<DmsId, Flow> = { tekion: TEKION_RO, vinsolutions: VINSOLUTIONS, cdk: CDK_ELEAD, dealr: DEALR };
+// CDK inventory Excel export (lib/cdk-inventory-run.ts): Modern Retail CRM > Reports > All > Inventory >
+// Total Inventory > Excel icon > Entire Inventory. The file downloads to Downloads with no print window.
+// The user signs in; the run drives the screens.
+const CDK_INVENTORY: Flow = {
+  dms: 'cdk_inventory',
+  dmsName: 'CDK Global',
+  title: 'CDK inventory export',
+  summary:
+    'Opens CDK, waits for you to sign in, opens Modern Retail CRM, and downloads the Total Inventory report as an Excel file to Downloads.',
+  startUrl: 'https://launch.cdkunify.com/',
+  allowedHosts: ['connectcdk.com', 'cdkunify.com'],
+  allow: { urls: ['https://launch.cdkunify.com/'], clicks: PAGING },
+  goal: 'Download the CDK Total Inventory report as an Excel file (collected by lib/cdk-inventory-run.ts, not by the model).',
+  result: {
+    properties: {
+      file: nullableString('The downloaded file name'),
+      summary: { type: 'string' },
+      unavailable: { type: 'array', items: { type: 'string' } },
+    },
+    required: ['file', 'summary', 'unavailable'],
+  },
+};
+
+export const FLOWS: Record<DmsId, Flow> = { tekion: TEKION_RO, vinsolutions: VINSOLUTIONS, cdk: CDK_ELEAD, dealr: DEALR, cdk_inventory: CDK_INVENTORY };
 export const DEFAULT_DMS: DmsId = 'tekion';
 
 /** The flow for a DMS id from the FE (case-insensitive), or undefined if it isn't supported. */

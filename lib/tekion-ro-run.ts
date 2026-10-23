@@ -193,7 +193,12 @@ export async function collectTekionRo(o: RunOptions): Promise<RunResult> {
     await tab.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: p.x, y: p.y, button: 'left', clickCount: 1 });
     await sleep(450);
   };
-  const click = async (spec: Spec, what: string) => tap(await find(spec, what));
+  /** A step is done only after its click has happened; a short pause lets the next one show on screen. */
+  const click = async (spec: Spec, what: string) => {
+    await tap(await find(spec, what));
+    await sleep(700);
+  };
+  const stage = (name: 'open' | 'signin' | 'read' | 'save') => o.log({ kind: 'stage', stage: name });
   /** Replaces the text of a field: click it, select all, delete, then type it one key at a time. */
   const typeInto = async (spec: Spec, what: string, value: string) => {
     await tap(await find(spec, what));
@@ -232,8 +237,14 @@ export async function collectTekionRo(o: RunOptions): Promise<RunResult> {
   try {
     await chrome.tabs.update(o.tabId, { url: `https://${HOST}${HOME}` });
     await waitForSettled(o.tabId, 800, 30_000);
+    stage('open');
+    await sleep(900);
+    stage('signin');
     await waitForSignIn(o.tabId, o.signal, o.log);
     if (o.signal.aborted) throw o.signal.reason;
+    await sleep(900);
+    stage('read');
+    await sleep(700);
 
     chrome.debugger.onEvent.addListener(onEvent);
     await tab.attach();
@@ -318,6 +329,8 @@ export async function collectTekionRo(o: RunOptions): Promise<RunResult> {
       }
     }
 
+    stage('save');
+    await sleep(900);
     const downloaded = exports.filter((e) => e.status === 'downloaded').length;
     const unavailable: string[] = [];
     if (exports.some((e) => e.status === 'too many')) unavailable.push('some windows still had more than 2,000 ROs');

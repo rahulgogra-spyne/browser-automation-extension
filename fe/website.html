@@ -770,6 +770,8 @@ function openBsim(){ $('#bpage').appendChild($('#win')); $('#bsim').classList.ad
 function closeBsim(){ $('#bsim').classList.remove('on'); $('.pane-body').insertBefore($('#win'), $('#log')); }
 function extStatus(t){ $('#ext-status').innerHTML=t; }
 function openDmsTab(){
+  // The real extension: starts the run, which opens its side panel and the CRM tab.
+  if (window.chrome && chrome.runtime && chrome.runtime.sendMessage) return runWithExtension();
   if(state.phase!=='install' && state.phase!=='running') return;
   const first = state.phase==='install';
   openBsim();
@@ -949,7 +951,7 @@ renderVersion(); renderStepper(); setDmsText(); openPicker();
 // Connects this page to the installed Spyne Report Helper extension (the same messages as fe/index.html).
 // The product's own backend would receive the result instead of this summary.
 const EXT_ID = 'pemgbfmmbggmaogmcdjnpkjnjjleppjo';
-const EXT_DMS = { cdk: 'cdk', tek: 'tekion', dealr: 'dealr' };
+const EXT_DMS = { cdk: 'cdk_inventory', tek: 'tekion', dealr: 'dealr' }; // CDK Global runs the inventory PDF
 let extPort = null;
 const spyneStatus = (lines) => { const box = document.getElementById('ext-status'); box.replaceChildren(...lines.map((t) => { const p = document.createElement('p'); p.style.margin = '0 0 4px'; p.textContent = t; return p; })); };
 const extSend = (msg) => new Promise((resolve) => {
@@ -982,10 +984,6 @@ async function runWithExtension() {
   spyneStatus(['Started. The side panel opened, and the CRM is opening in its own tab.']);
 }
 </script>
-<div id="ext-panel" style="position:fixed;right:16px;bottom:16px;z-index:200;width:300px;background:#fff;border:1px solid #E4E4EA;border-radius:12px;box-shadow:0 8px 24px rgba(20,10,60,.12);padding:12px;font:13px/1.4 Inter,system-ui,sans-serif;color:#1a1a24">
-  <div style="font-weight:600;margin-bottom:8px">Spyne Report Helper</div>
-  <button id="ext-run" onclick="runWithExtension()" style="background:#4600F2;color:#fff;border:0;border-radius:8px;padding:8px 12px;font-weight:600;cursor:pointer;width:100%">Run with Spyne Report Helper</button>
-  <div id="ext-status" style="font-size:12.5px;color:#6b6b7b;margin-top:10px"></div>
-</div>
+
 </body>
 </html>

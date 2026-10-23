@@ -5,6 +5,7 @@ import { collectCdkElead } from '@/lib/cdk-elead-run';
 import { collectDealr } from '@/lib/dealr-run';
 import { fieldsCsv, makeZip, toCsv } from '@/lib/export';
 import { collectTekionRo } from '@/lib/tekion-ro-run';
+import { collectCdkInventory } from '@/lib/cdk-inventory-run';
 import { CONFIG } from '@/lib/config';
 import { DEFAULT_DMS, FLOWS, type DmsId, type Flow } from '@/lib/flows';
 import { openai } from '@/lib/openai';
@@ -252,7 +253,9 @@ export function App() {
       use(tab.id!);
 
       // VinSolutions reads its data through the signed-in page (lib/vinsolutions-run.ts); the other DMSs run the agent.
-      const result = flow.dms === 'dealr'
+      const result = flow.dms === 'cdk_inventory'
+        ? await collectCdkInventory({ tabId: tab.id!, log: push, signal: abort.signal })
+        : flow.dms === 'dealr'
         ? await collectDealr({ tabId: tab.id!, log: push, signal: abort.signal })
         : flow.dms === 'tekion'
         ? await collectTekionRo({ tabId: tab.id!, log: push, signal: abort.signal })
@@ -296,6 +299,19 @@ export function App() {
             cancel.addEventListener('abort', clear, { once: true });
           }),
       });
+      // The inventory PDF comes back as base64: save it to Downloads and keep only its name in the result.
+      const pdf = result.data as Record<string, unknown> | undefined;
+      if (pdf && typeof pdf.pdf_base64 === 'string') {
+        const bytes = Uint8Array.from(atob(pdf.pdf_base64), (c) => c.charCodeAt(0));
+        saveFile(new Blob([bytes], { type: 'application/pdf' }), String(pdf.file ?? 'cdk-inventory.pdf'));
+        delete pdf.pdf_base64;
+      }
+      // The CDK run's step trace comes back in the result: save it as a text file, success or failure.
+      const trace = result.data as Record<string, unknown> | undefined;
+      if (trace && typeof trace.run_log === 'string') {
+        saveFile(new Blob([trace.run_log + '\n'], { type: 'text/plain' }), `cdk-run-log-${stampNow()}.txt`);
+        delete trace.run_log;
+      }
       used = result.tokens;
       done = { data: result.data as Record<string, unknown> | undefined, text: result.finalText, error: result.error, stopped: result.stopped };
     } catch (e) {
@@ -730,18 +746,30 @@ function DatasetSection({ name, rows, defaultOpen, onJson, onCsv }: { name: stri
  * Read from the run's own log: the sign-in wait and the reading start are what tell them apart.
  */
 function stagesOf(flow: Flow, mode: Mode, steps: Step[]): { label: string; state: 'done' | 'active' | 'pending'; you?: boolean }[] {
+  const labels = [`Open ${flow.dmsName}`, `Sign in to ${flow.dmsName}`, 'Read the data', 'Save the result'];
+  // A run that reports its stages (lib/tekion-ro-run.ts) drives the list: a stage is shown when it starts.
+  const reported = steps.flatMap((s) => (s.entry.kind === 'stage' ? [s.entry.stage] : []));
+  if (reported.length) {
+    const order = ['open', 'signin', 'read', 'save'] as const;
+    const at = order.indexOf(reported[reported.length - 1]!);
+    const finished = mode === 'done';
+    const state = (i: number): 'done' | 'active' | 'pending' => (finished || i < at ? 'done' : i === at ? 'active' : 'pending');
+    return labels.map((label, i) => ({ label, state: state(i), you: i === 1 }));
+  }
+  // Other flows: the sign-in wait and the reading start are what tell the stages apart.
   const texts = steps.flatMap((s) => (s.entry.kind === 'info' ? [s.entry.text] : []));
   const waiting = mode === 'handoff' || texts.some((t) => /^Sign in to /.test(t));
   const signedIn = texts.some((t) => /^Reading /.test(t));
-  const stages: { label: string; state: 'done' | 'active' | 'pending'; you?: boolean }[] = [{ label: `Open ${flow.dmsName}`, state: 'done' }];
   // Done once the run is past sign-in: it read the data, finished, or never had to wait (already signed in).
   const past = signedIn || mode === 'done' || (mode === 'working' && !waiting);
   const signIn = past && mode !== 'handoff' ? 'done' : waiting ? 'active' : 'pending';
-  stages.push({ label: `Sign in to ${flow.dmsName}`, state: signIn, you: true });
   const reading = mode === 'done' ? 'done' : mode === 'working' && (signedIn || !waiting) ? 'active' : 'pending';
-  stages.push({ label: 'Read the data', state: reading });
-  stages.push({ label: 'Save the result', state: mode === 'done' ? 'done' : 'pending' });
-  return stages;
+  return [
+    { label: labels[0]!, state: 'done' },
+    { label: labels[1]!, state: signIn, you: true },
+    { label: labels[2]!, state: reading },
+    { label: labels[3]!, state: mode === 'done' ? 'done' : 'pending' },
+  ];
 }
 
 function Stages({ flow, mode, steps }: { flow: Flow; mode: Mode; steps: Step[] }) {

@@ -19,7 +19,9 @@ export type LogEntry =
   | { kind: 'info'; text: string }
   | { kind: 'error'; text: string }
   /** An action the read-only guard refused. */
-  | { kind: 'blocked'; text: string };
+  | { kind: 'blocked'; text: string }
+  /** A stage of the run, reported when it actually starts (the panel's step list follows these). */
+  | { kind: 'stage'; stage: 'open' | 'signin' | 'read' | 'save' };
 
 function pointOf(a: ComputerAction): { x: number; y: number } | undefined {
   if ('x' in a && 'y' in a) return { x: a.x, y: a.y };

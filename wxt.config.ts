@@ -65,7 +65,7 @@ export default defineConfig({
     name: 'Spyne Report Helper',
     description: 'Runs one fixed VinSolutions flow on your behalf: you sign in, it does the rest and hands back the result.',
     key: MANIFEST_KEY,
-    permissions: ['debugger', 'sidePanel', 'tabs', 'tabGroups'],
+    permissions: ['debugger', 'sidePanel', 'tabs', 'tabGroups', 'downloads'],
     externally_connectable: { matches: FE_MATCHES },
     icons: {
       16: '/icons/icon16.png',
